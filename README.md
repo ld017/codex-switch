@@ -1,6 +1,6 @@
 # Codex Switch
 
-`Codex Switch` 是一个 macOS 菜单栏和 Windows 系统托盘工具，把两类独立状态放在同一个菜单中管理：
+`Codex Switch` 是一个 macOS 菜单栏工具和 Windows 桌面面板应用，用于统一管理两类独立状态：
 
 - Codex provider：`OpenAI` / `Sub2API`
 - OpenAI 账号：多账号登录、切换和逐账号额度监控，包括可用重置卡数量和最近一张的到期时间

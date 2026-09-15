@@ -1,6 +1,6 @@
 # Codex Switch for Windows
 
-Windows 10/11 x64 原生托盘版，提供 Provider 切换、多个 OpenAI 账号登录/切换和逐账号额度监控。
+Windows 10/11 x64 原生桌面面板版，提供 Provider 切换、多个 OpenAI 账号登录/切换和逐账号额度监控。
 
 ## 安装
 
@@ -10,7 +10,7 @@ Windows 10/11 x64 原生托盘版，提供 Provider 切换、多个 OpenAI 账�
 
 ## 使用
 
-右击系统托盘图标可以：
+启动 Codex Switch 后会打开主面板，可以：
 
 - 查看和切换 OpenAI / Sub2API Provider。
 - 登录、切换、重命名或删除 OpenAI 账号。
