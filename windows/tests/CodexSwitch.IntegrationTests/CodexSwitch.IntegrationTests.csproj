@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodexSwitch.Core\CodexSwitch.Core.csproj" />
     <ProjectReference Include="..\..\src\CodexSwitch.App\CodexSwitch.App.csproj" />
+    <ProjectReference Include="..\CodexSwitch.FakeCli\CodexSwitch.FakeCli.csproj" />
   </ItemGroup>
 
 </Project>
