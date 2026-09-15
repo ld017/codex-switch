@@ -1,0 +1,27 @@
+name: Windows
+
+on:
+  push:
+    paths: ["windows/**", ".github/workflows/windows.yml", "README.md"]
+  pull_request:
+    paths: ["windows/**", ".github/workflows/windows.yml", "README.md"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+      - name: Test
+        run: dotnet test windows/CodexSwitch.sln -c Release
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Build installer
+        shell: powershell
+        run: windows/scripts/build-installer.ps1 -SkipTests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CodexSwitch-Windows-x64
+          path: artifacts/installer/CodexSwitch-Setup-x64.exe

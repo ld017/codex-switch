@@ -1,6 +1,6 @@
 # Codex Switch
 
-`Codex Switch` 是一个 macOS 菜单栏工具，把两类独立状态放在同一个菜单中管理：
+`Codex Switch` 是一个 macOS 菜单栏和 Windows 系统托盘工具，把两类独立状态放在同一个菜单中管理：
 
 - Codex provider：`OpenAI` / `Sub2API`
 - OpenAI 账号：多账号登录、切换和逐账号额度监控，包括可用重置卡数量和最近一张的到期时间
@@ -27,6 +27,17 @@
 菜单、日志和调试输出不显示 token。
 
 ## 构建与安装
+
+### Windows 10/11 x64
+
+Windows 版使用 .NET 8 WinForms，安装包自带运行时，并提供开始菜单和可选开机启动。详细说明见 [windows/README.md](windows/README.md)。
+
+```powershell
+dotnet test windows/CodexSwitch.sln -c Release
+powershell -ExecutionPolicy Bypass -File windows/scripts/build-installer.ps1
+```
+
+### macOS
 
 ```bash
 swift test
