@@ -1,6 +1,8 @@
+using CodexSwitch.App.Tray;
+
 namespace CodexSwitch.App;
 
-static class Program
+internal static class Program
 {
     /// <summary>
     ///  The main entry point for the application.
@@ -11,6 +13,7 @@ static class Program
         // To customize application configuration such as set high DPI settings or default font,
         // see https://aka.ms/applicationconfiguration.
         ApplicationConfiguration.Initialize();
-        Application.Run(new Form1());
+        try { Application.Run(new TrayApplicationContext(CompositionRoot.Create())); }
+        catch (Exception error) { MessageBox.Show(error.Message, "Codex Switch 启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
 }
