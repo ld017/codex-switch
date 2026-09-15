@@ -19,7 +19,7 @@ public sealed class TrayApplicationContext : ApplicationContext
     public TrayApplicationContext(AppServices services)
     {
         _services = services;
-        _icon = new NotifyIcon { Text = "Codex Switch", Icon = SystemIcons.Application, Visible = true, ContextMenuStrip = new ContextMenuStrip() };
+        _icon = new NotifyIcon { Text = "Codex Switch", Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application, Visible = true, ContextMenuStrip = new ContextMenuStrip() };
         _icon.ContextMenuStrip.Opening += async (_, _) => await RefreshMenuAsync();
         _timer.Tick += async (_, _) => await RefreshUsageAsync(false);
         _timer.Start();

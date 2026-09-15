@@ -27,6 +27,7 @@ public sealed class MainForm : Form
     {
         _services = services;
         Text = "Codex Switch"; Width = 980; Height = 640; MinimumSize = new Size(820, 520);
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? Icon;
         StartPosition = FormStartPosition.CenterScreen; Font = new Font("Segoe UI", 9F);
         if (startMinimized) WindowState = FormWindowState.Minimized;
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, Padding = new Padding(18) };

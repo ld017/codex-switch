@@ -8,11 +8,15 @@ public sealed class ProcessRunner : IProcessRunner
 {
     public async Task<ProcessResult> RunAsync(ProcessSpec specification, CancellationToken cancellationToken)
     {
-        var start = new ProcessStartInfo(specification.FileName) { UseShellExecute = specification.Visible };
+        var start = new ProcessStartInfo(specification.FileName)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = !specification.Visible,
+        };
         foreach (var argument in specification.Arguments) start.ArgumentList.Add(argument);
         if (!specification.Visible)
         {
-            start.RedirectStandardOutput = true; start.RedirectStandardError = true; start.CreateNoWindow = true;
+            start.RedirectStandardOutput = true; start.RedirectStandardError = true;
             start.StandardOutputEncoding = new UTF8Encoding(false); start.StandardErrorEncoding = new UTF8Encoding(false);
         }
         if (specification.Environment is not null)

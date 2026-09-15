@@ -18,6 +18,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExeName}
+SetupIconFile=..\src\CodexSwitch.App\Resources\CodexSwitch.ico
 CloseApplications=yes
 
 [Tasks]

@@ -21,6 +21,7 @@
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <ApplicationIcon>Resources\CodexSwitch.ico</ApplicationIcon>
   </PropertyGroup>
 
 </Project>
