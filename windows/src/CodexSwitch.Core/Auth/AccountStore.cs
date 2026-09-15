@@ -114,8 +114,12 @@ public sealed class AccountStore
         {
             var configuration = LoadConfiguration();
             _ = FindProfile(configuration, profileId);
+            if (configuration.ActiveProfileId == profileId && configuration.Profiles.Count > 1)
+            {
+                throw new InvalidOperationException("请先切换到其他账号，再删除当前账号。");
+            }
             var profiles = configuration.Profiles.Where(profile => profile.Id != profileId).ToArray();
-            var active = configuration.ActiveProfileId == profileId ? profiles.FirstOrDefault()?.Id : configuration.ActiveProfileId;
+            var active = configuration.ActiveProfileId == profileId ? null : configuration.ActiveProfileId;
             SaveConfiguration(configuration with { ActiveProfileId = active, Profiles = profiles });
             _files.Delete(GetEncryptedPath(profileId));
         }

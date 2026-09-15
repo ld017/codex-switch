@@ -27,7 +27,9 @@ public static class Program
             {
                 Console.WriteLine(JsonSerializer.Serialize(new
                 {
-                    jsonrpc = "2.0", id = id.GetInt32(), result = new
+                    jsonrpc = "2.0",
+                    id = id.GetInt32(),
+                    result = new
                     {
                         rateLimits = new { primary = new { usedPercent = 25.0, windowDurationMins = 300, resetsAt = 2000000000L }, secondary = (object?)null, credits = (object?)null, planType = "pro" },
                         rateLimitResetCredits = new { availableCount = 2, credits = Array.Empty<object>() },

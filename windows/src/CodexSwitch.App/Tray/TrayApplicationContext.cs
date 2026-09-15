@@ -116,9 +116,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         var label = LoginPrompt.Show(null, "登录新账号", "账号名称："); if (label is null) return;
         await RunMutationAsync(async token =>
         {
-            try { await _services.Login.LoginAsync(label, false, token); }
-            catch (DuplicateAccountException duplicate) when (MessageBox.Show($"账号“{duplicate.Existing.Label}”已存在，是否更新凭据？", "重复账号", MessageBoxButtons.YesNo) == DialogResult.Yes)
-            { await _services.Login.LoginAsync(label, true, token); }
+            await _services.Login.LoginAsync(label, duplicate =>
+                MessageBox.Show($"账号“{duplicate.Label}”已存在，是否更新凭据？", "重复账号", MessageBoxButtons.YesNo) == DialogResult.Yes, token);
             await RefreshUsageAsync(false);
         });
     }

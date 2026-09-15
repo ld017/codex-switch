@@ -39,6 +39,20 @@ public sealed class AccountStoreTests
         Assert.False(File.Exists(System.IO.Path.Combine(directory.Path, "accounts", $"{profile.Id:N}.bin")));
     }
 
+    [Fact]
+    public async Task RemoveAsync_rejects_active_account_when_another_account_exists()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.Path, new PrefixProtector(), new AtomicFileStore());
+        var active = await store.SaveAsync("Active", TestAuth.OAuth("a1", "r1", "acct-1"), default);
+        _ = await store.SaveAsync("Other", TestAuth.OAuth("a2", "r2", "acct-2"), default);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RemoveAsync(active.Id, default));
+
+        Assert.Equal(2, (await store.ListAsync(default)).Count);
+        Assert.Equal(active.Id, await store.GetActiveProfileIdAsync(default));
+    }
+
     private sealed class PrefixProtector : ICredentialProtector
     {
         public byte[] Protect(ReadOnlySpan<byte> plaintext) => Encoding.UTF8.GetBytes("protected:" + Convert.ToBase64String(plaintext));

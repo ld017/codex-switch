@@ -27,9 +27,16 @@ public sealed class AccountImportService
         CancellationToken cancellationToken)
     {
         var auth = AuthBlob.Parse(authJson);
-        var fingerprint = auth.GetIdentity().Fingerprint();
-        var existing = (await _store.ListAsync(cancellationToken))
-            .FirstOrDefault(profile => string.Equals(profile.IdentityFingerprint, fingerprint, StringComparison.Ordinal));
+        AccountProfile? existing = null;
+        foreach (var profile in await _store.ListAsync(cancellationToken))
+        {
+            var stored = AuthBlob.Parse(await _store.LoadAuthAsync(profile.Id, cancellationToken));
+            if (stored.IdentityMatches(auth))
+            {
+                existing = profile;
+                break;
+            }
+        }
         if (existing is null)
         {
             return await _store.SaveAsync(label, authJson, cancellationToken);

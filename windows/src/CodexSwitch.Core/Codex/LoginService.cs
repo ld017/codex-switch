@@ -33,6 +33,12 @@ public sealed class LoginService
         string label,
         bool overwriteDuplicate,
         CancellationToken cancellationToken)
+        => await LoginAsync(label, _ => overwriteDuplicate, cancellationToken);
+
+    public async Task<AccountProfile> LoginAsync(
+        string label,
+        Func<AccountProfile, bool> confirmDuplicate,
+        CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_temporaryRoot);
         var codexHome = Path.Combine(_temporaryRoot, $"login-{Guid.NewGuid():N}");
@@ -64,7 +70,14 @@ public sealed class LoginService
 
             var authJson = await File.ReadAllBytesAsync(authPath, cancellationToken);
             _ = AuthBlob.Parse(authJson);
-            return await _importer.ImportAsync(label, authJson, overwriteDuplicate, cancellationToken);
+            try
+            {
+                return await _importer.ImportAsync(label, authJson, false, cancellationToken);
+            }
+            catch (DuplicateAccountException duplicate) when (confirmDuplicate(duplicate.Existing))
+            {
+                return await _importer.ImportAsync(label, authJson, true, cancellationToken);
+            }
         }
         finally
         {

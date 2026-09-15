@@ -21,9 +21,14 @@ public sealed class CodexRpcClient : IAsyncDisposable
         _timeout = timeout ?? TimeSpan.FromSeconds(8);
         var start = new ProcessStartInfo(executable)
         {
-            UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
-            RedirectStandardError = true, CreateNoWindow = true,
-            StandardInputEncoding = new UTF8Encoding(false), StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false),
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            StandardInputEncoding = new UTF8Encoding(false),
+            StandardOutputEncoding = new UTF8Encoding(false),
+            StandardErrorEncoding = new UTF8Encoding(false),
         };
         foreach (var argument in argumentPrefix ?? []) start.ArgumentList.Add(argument);
         start.ArgumentList.Add("-s"); start.ArgumentList.Add("read-only"); start.ArgumentList.Add("app-server");

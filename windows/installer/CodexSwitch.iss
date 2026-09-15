@@ -35,6 +35,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "启动 Codex Switch"; Flags: nowait postinstall skipifsilent
 
+[UninstallRun]
+Filename: "{cmd}"; Parameters: "/C reg delete ""HKCU\Software\Microsoft\Windows\CurrentVersion\Run"" /v CodexSwitch /f"; Flags: runhidden; RunOnceId: "RemoveStartupEntry"
+
 [Code]
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin

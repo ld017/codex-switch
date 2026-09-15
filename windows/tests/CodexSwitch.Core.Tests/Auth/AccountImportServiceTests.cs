@@ -35,6 +35,20 @@ public sealed class AccountImportServiceTests
         Assert.Contains("a2", System.Text.Encoding.UTF8.GetString(await store.LoadAuthAsync(first.Id, default)));
     }
 
+    [Fact]
+    public async Task ImportAsync_recognizes_same_account_when_new_auth_adds_identity_claims()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.Path, new PassthroughProtector(), new AtomicFileStore());
+        var service = new AccountImportService(store);
+        var first = await service.ImportAsync("First", TestAuth.OAuth("a1", "r1", "acct-1"), false, default);
+
+        var updated = await service.ImportAsync("Updated", TestAuth.OAuth("a2", "r2", "acct-1", TestAuth.IdToken("user-1", "mail@example.com")), true, default);
+
+        Assert.Equal(first.Id, updated.Id);
+        Assert.Single(await store.ListAsync(default));
+    }
+
     internal sealed class PassthroughProtector : ICredentialProtector
     {
         public byte[] Protect(ReadOnlySpan<byte> plaintext) => plaintext.ToArray();
