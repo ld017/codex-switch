@@ -11,6 +11,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{E33364E5
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexSwitch.Core.Tests", "tests\CodexSwitch.Core.Tests\CodexSwitch.Core.Tests.csproj", "{9B96A2A1-0A20-4017-9174-DD9DA8BB7BBD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexSwitch.App", "src\CodexSwitch.App\CodexSwitch.App.csproj", "{316EBF43-65ED-4660-961E-7F97EE159ED5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CodexSwitch.IntegrationTests", "tests\CodexSwitch.IntegrationTests\CodexSwitch.IntegrationTests.csproj", "{7E787878-4DAE-4759-8850-BDAF6679883B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -28,9 +32,19 @@ Global
 		{9B96A2A1-0A20-4017-9174-DD9DA8BB7BBD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9B96A2A1-0A20-4017-9174-DD9DA8BB7BBD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9B96A2A1-0A20-4017-9174-DD9DA8BB7BBD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{316EBF43-65ED-4660-961E-7F97EE159ED5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{316EBF43-65ED-4660-961E-7F97EE159ED5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{316EBF43-65ED-4660-961E-7F97EE159ED5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{316EBF43-65ED-4660-961E-7F97EE159ED5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7E787878-4DAE-4759-8850-BDAF6679883B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7E787878-4DAE-4759-8850-BDAF6679883B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7E787878-4DAE-4759-8850-BDAF6679883B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7E787878-4DAE-4759-8850-BDAF6679883B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{9928FB70-891D-4D3C-BCA6-FC2FB02EDF05} = {FAFD5EA4-16A1-4025-93B0-1004FAFBA98B}
 		{9B96A2A1-0A20-4017-9174-DD9DA8BB7BBD} = {E33364E5-D9E4-4E00-B30A-A8F9A02D3CDB}
+		{316EBF43-65ED-4660-961E-7F97EE159ED5} = {FAFD5EA4-16A1-4025-93B0-1004FAFBA98B}
+		{7E787878-4DAE-4759-8850-BDAF6679883B} = {E33364E5-D9E4-4E00-B30A-A8F9A02D3CDB}
 	EndGlobalSection
 EndGlobal
