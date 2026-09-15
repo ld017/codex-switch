@@ -1,0 +1,4 @@
+.build/
+.DS_Store
+upstream-codex-profile-switcher/
+docs/superpowers/
