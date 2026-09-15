@@ -3,3 +3,7 @@
 upstream-codex-profile-switcher/
 docs/superpowers/
 .worktrees/
+windows/**/bin/
+windows/**/obj/
+.vs/
+artifacts/
