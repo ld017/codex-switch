@@ -21,7 +21,13 @@ public sealed class UsageRefreshCoordinator
         {
             try { existing[profile.Id] = UsageState.Available(await _fetcher.FetchAsync(profile.Id, cancellationToken)); }
             catch (Exception error) when (error is not OperationCanceledException)
-            { existing[profile.Id] = UsageState.Failed(SecretRedactor.Redact(error.Message), existing.GetValueOrDefault(profile.Id)?.Snapshot); }
+            {
+                var message = SecretRedactor.Redact(error.Message);
+                var previous = existing.GetValueOrDefault(profile.Id)?.Snapshot;
+                existing[profile.Id] = UsageErrorClassifier.IsAuthenticationRequired(message)
+                    ? UsageState.LoginRequired(message, previous)
+                    : UsageState.Failed(message, previous);
+            }
         }
         await _cache.SaveAsync(existing, cancellationToken);
         return existing;

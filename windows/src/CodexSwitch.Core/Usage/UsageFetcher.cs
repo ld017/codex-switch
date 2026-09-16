@@ -13,15 +13,34 @@ public sealed class UsageFetcher
     private readonly string _configPath;
     private readonly string _temporaryRoot;
     private readonly RateLimitsFetcher _fetch;
+    private readonly ITemporaryDirectoryCleaner _cleaner;
 
-    public UsageFetcher(AccountStore accounts, string configPath, string temporaryRoot, RateLimitsFetcher fetch)
+    public UsageFetcher(
+        AccountStore accounts,
+        string configPath,
+        string temporaryRoot,
+        RateLimitsFetcher fetch,
+        ITemporaryDirectoryCleaner? cleaner = null)
     {
-        _accounts = accounts; _configPath = configPath; _temporaryRoot = Path.GetFullPath(temporaryRoot); _fetch = fetch;
+        _accounts = accounts;
+        _configPath = configPath;
+        _temporaryRoot = Path.GetFullPath(temporaryRoot);
+        _fetch = fetch;
+        _cleaner = cleaner ?? new TemporaryDirectoryCleaner();
     }
 
     public async Task<UsageSnapshot> FetchAsync(Guid profileId, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_temporaryRoot);
+        try
+        {
+            await _cleaner.CleanStaleAsync(_temporaryRoot, TimeSpan.FromMinutes(5), cancellationToken);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            // Stale temporary data must not prevent a fresh usage request.
+        }
+
         var home = Path.Combine(_temporaryRoot, $"usage-{profileId:N}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(home);
         try
@@ -45,7 +64,14 @@ public sealed class UsageFetcher
         }
         finally
         {
-            if (Directory.Exists(home)) Directory.Delete(home, true);
+            try
+            {
+                _ = await _cleaner.TryDeleteAsync(home, CancellationToken.None);
+            }
+            catch
+            {
+                // A delayed Windows file-handle release must not replace valid usage data.
+            }
         }
     }
 }

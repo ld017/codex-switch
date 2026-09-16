@@ -28,6 +28,7 @@ public sealed record UsageState(UsageStatus Status, UsageSnapshot? Snapshot, str
 {
     public static UsageState Available(UsageSnapshot snapshot) => new(UsageStatus.Available, snapshot, null);
     public static UsageState Refreshing(UsageSnapshot? previous = null) => new(UsageStatus.Refreshing, previous, null);
+    public static UsageState LoginRequired(string message, UsageSnapshot? previous = null) => new(UsageStatus.AuthenticationRequired, previous, message);
     public static UsageState Failed(string message, UsageSnapshot? previous = null) => new(UsageStatus.Error, previous, message);
 }
 

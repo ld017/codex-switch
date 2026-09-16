@@ -31,4 +31,33 @@ public sealed class UsageFetcherTests
         Assert.NotNull(observedHome);
         Assert.False(Directory.Exists(observedHome));
     }
+
+    [Fact]
+    public async Task FetchAsync_returns_usage_when_temporary_cleanup_cannot_finish()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.File("data"), new AccountImportServiceTests.PassthroughProtector(), new AtomicFileStore());
+        var profile = await store.SaveAsync("Work", TestAuth.OAuth("access", "refresh", "acct-1"), default);
+        var configPath = directory.File("config.toml");
+        await File.WriteAllTextAsync(configPath, "model = \"gpt-5\"\n");
+        var cleaner = new RefusingCleaner();
+        var fetcher = new UsageFetcher(store, configPath, directory.File("tmp"),
+            (_, _) => Task.FromResult(new RateLimitsResponse(new RateLimitsSnapshot(new RateLimitWindow(17, 300, null), null, null, "pro"), null)), cleaner);
+
+        var result = await fetcher.FetchAsync(profile.Id, default);
+
+        Assert.Equal(17, result.PrimaryUsedPercent);
+        Assert.Equal(1, cleaner.DeleteAttempts);
+    }
+
+    private sealed class RefusingCleaner : ITemporaryDirectoryCleaner
+    {
+        public int DeleteAttempts { get; private set; }
+        public Task CleanStaleAsync(string root, TimeSpan minimumAge, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<bool> TryDeleteAsync(string path, CancellationToken cancellationToken)
+        {
+            DeleteAttempts++;
+            return Task.FromResult(false);
+        }
+    }
 }
