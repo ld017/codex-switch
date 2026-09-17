@@ -10,8 +10,24 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
     public async Task<CodexShutdownResult> RequestCloseAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         var processes = Process.GetProcessesByName("ChatGPT");
-        _captured = new CapturedProcessSet(processes.Select(x => x.Id));
-        foreach (var process in processes) { try { process.CloseMainWindow(); } finally { process.Dispose(); } }
+        _captured = CapturedProcessSet.SelectRoots(processes.Select(process => new CodexProcessCandidate(
+            process.Id,
+            process.MainWindowHandle != IntPtr.Zero,
+            SafeStartTime(process))));
+        foreach (var process in processes)
+        {
+            try
+            {
+                if (_captured.ProcessIds.Contains(process.Id))
+                {
+                    _ = process.CloseMainWindow();
+                }
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
         var exited = await WaitUntilCapturedExitAsync(timeout, cancellationToken);
         return new CodexShutdownResult(exited, _captured.ProcessIds);
     }
@@ -54,5 +70,17 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
             await Task.Delay(250, cancellationToken);
         } while (DateTimeOffset.UtcNow < deadline);
         return false;
+    }
+
+    private static DateTimeOffset SafeStartTime(Process process)
+    {
+        try
+        {
+            return process.StartTime;
+        }
+        catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return DateTimeOffset.MaxValue;
+        }
     }
 }
