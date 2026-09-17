@@ -34,7 +34,8 @@ public sealed class AccountUsagePresentationTests
         var presentation = AccountUsagePresentation.From(snapshot, now);
 
         Assert.Equal("2时44分", presentation.Primary.ResetText);
-        Assert.Equal("重置卡 3 张 · 最近到期 9月21日 06:46", presentation.ResetCreditsText);
+        Assert.Equal("重置卡 3 张", presentation.ResetCreditsText);
+        Assert.Equal("最近到期 9月21日 06:46", presentation.ResetCreditExpiryText);
     }
 
     [Fact]

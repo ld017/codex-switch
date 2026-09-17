@@ -23,6 +23,7 @@ public sealed record AccountUsagePresentation(
     UsageBarPresentation Primary,
     UsageBarPresentation Secondary,
     string ResetCreditsText,
+    string ResetCreditExpiryText,
     string StatusText)
 {
     public static AccountUsagePresentation From(UsageSnapshot? snapshot, DateTimeOffset now)
@@ -30,7 +31,7 @@ public sealed record AccountUsagePresentation(
         if (snapshot is null)
         {
             var empty = Bar(null, null, now);
-            return new AccountUsagePresentation("—", "— cr", empty, empty, "重置卡 —", "尚未刷新");
+            return new AccountUsagePresentation("—", "— cr", empty, empty, "重置卡 —", string.Empty, "尚未刷新");
         }
 
         var credits = snapshot.CreditsRemaining is { } balance
@@ -39,10 +40,9 @@ public sealed record AccountUsagePresentation(
         var resetCards = snapshot.ResetCreditsAvailable is { } count
             ? $"重置卡 {count} 张"
             : "重置卡 —";
-        if (snapshot.NextResetCreditExpiresAt is { } expires)
-        {
-            resetCards += $" · 最近到期 {expires.LocalDateTime:M月d日 HH:mm}";
-        }
+        var expiryText = snapshot.NextResetCreditExpiresAt is { } expires
+            ? $"最近到期 {expires.LocalDateTime:M月d日 HH:mm}"
+            : string.Empty;
 
         return new AccountUsagePresentation(
             string.IsNullOrWhiteSpace(snapshot.PlanType) ? "—" : snapshot.PlanType,
@@ -50,6 +50,7 @@ public sealed record AccountUsagePresentation(
             Bar(snapshot.PrimaryUsedPercent, snapshot.PrimaryResetAt, now),
             Bar(snapshot.SecondaryUsedPercent, snapshot.SecondaryResetAt, now),
             resetCards,
+            expiryText,
             $"更新于 {snapshot.FetchedAt.LocalDateTime:HH:mm}");
     }
 

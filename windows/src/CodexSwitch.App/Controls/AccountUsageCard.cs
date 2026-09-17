@@ -11,6 +11,7 @@ public sealed class AccountUsageCard : RoundedPanel
     private readonly Label _secondaryPercent = Label(FontStyle.Bold, 10f);
     private readonly Label _secondaryReset = Label(FontStyle.Regular, 9f, Color.FromArgb(110, 116, 126));
     private readonly Label _resetCards = Label(FontStyle.Regular, 9f, Color.FromArgb(69, 132, 190));
+    private readonly Label _resetExpiry = Label(FontStyle.Regular, 9f, Color.FromArgb(69, 132, 190));
     private readonly Label _status = Label(FontStyle.Regular, 8.5f, Color.FromArgb(120, 126, 136));
     private readonly UsageBarControl _primaryBar = new();
     private readonly UsageBarControl _secondaryBar = new();
@@ -64,7 +65,10 @@ public sealed class AccountUsageCard : RoundedPanel
         layout.Controls.Add(_secondaryPercent, 2, 2);
         layout.Controls.Add(_secondaryReset, 3, 2);
         layout.Controls.Add(_resetCards, 0, 3);
-        layout.SetColumnSpan(_resetCards, 4);
+        layout.SetColumnSpan(_resetCards, 2);
+        _resetExpiry.TextAlign = ContentAlignment.MiddleRight;
+        layout.Controls.Add(_resetExpiry, 2, 3);
+        layout.SetColumnSpan(_resetExpiry, 2);
         layout.Controls.Add(_status, 0, 4);
         layout.SetColumnSpan(_status, 4);
         Controls.Add(layout);
@@ -96,6 +100,7 @@ public sealed class AccountUsageCard : RoundedPanel
         BindBar(_primaryBar, _primaryPercent, _primaryReset, presentation.Primary);
         BindBar(_secondaryBar, _secondaryPercent, _secondaryReset, presentation.Secondary);
         _resetCards.Text = "↻  " + presentation.ResetCreditsText;
+        _resetExpiry.Text = presentation.ResetCreditExpiryText;
         _status.Text = statusText;
         if (Controls[0].Controls.Find("activeMark", true).FirstOrDefault() is Label mark)
         {

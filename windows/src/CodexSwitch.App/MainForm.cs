@@ -125,15 +125,15 @@ public sealed class MainForm : Form
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
-        AddAction(layout, "刷新账号额度", () => RefreshUsageAsync(true), 0, 0);
-        AddAction(layout, "登录新账号", () => LoginAsync(LoginMode.Browser), 1, 0);
+        AddAction(layout, "刷新额度", () => RefreshUsageAsync(true), 0, 0);
+        AddAction(layout, "登录账号", () => LoginAsync(LoginMode.Browser), 1, 0);
         AddAction(layout, "设备码登录", () => LoginAsync(LoginMode.DeviceCode), 2, 0);
-        AddAction(layout, "重新登录选中账号", ReauthenticateSelectedAccountAsync, 0, 1);
-        AddAction(layout, "切换选中账号", SwitchSelectedAccountAsync, 1, 1);
+        AddAction(layout, "重新登录", ReauthenticateSelectedAccountAsync, 0, 1);
+        AddAction(layout, "切换账号", SwitchSelectedAccountAsync, 1, 1);
         AddAction(layout, "重命名", RenameSelectedAccountAsync, 2, 1);
         AddAction(layout, "删除账号", RemoveSelectedAccountAsync, 0, 2);
         AddAction(layout, "打开 Codex", () => RunUiOperationAsync("打开 Codex", () => _services.Lifecycle.LaunchAsync(default)), 1, 2);
-        AddAction(layout, "打开日志目录", () => { OpenLogs(); return Task.CompletedTask; }, 2, 2);
+        AddAction(layout, "打开日志", () => { OpenLogs(); return Task.CompletedTask; }, 2, 2);
 
         _startup.CheckedChanged += (_, _) => ToggleStartup();
         _startup.Margin = new Padding(8, 10, 8, 4);
