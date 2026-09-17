@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using CodexSwitch.App.Accounts;
 using CodexSwitch.Core.Auth;
+using CodexSwitch.Core.Codex;
 using CodexSwitch.Core.Configuration;
 using CodexSwitch.Core.Diagnostics;
 using CodexSwitch.Core.Usage;
@@ -82,7 +83,8 @@ public sealed class MainForm : Form
         _accountsGrid.Columns.Add("state", "状态");
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(0, 8, 0, 0) };
-        buttons.Controls.Add(MakeButton("登录新账号", async (_, _) => await LoginAsync()));
+        buttons.Controls.Add(MakeButton("登录新账号", async (_, _) => await LoginAsync(LoginMode.Browser)));
+        buttons.Controls.Add(MakeButton("设备码登录", async (_, _) => await LoginAsync(LoginMode.DeviceCode)));
         buttons.Controls.Add(MakeButton("切换账号", async (_, _) => await SwitchSelectedAccountAsync()));
         buttons.Controls.Add(MakeButton("重命名", async (_, _) => await RenameSelectedAccountAsync()));
         buttons.Controls.Add(MakeButton("删除", async (_, _) => await RemoveSelectedAccountAsync()));
@@ -208,13 +210,13 @@ public sealed class MainForm : Form
         });
     }
 
-    private async Task LoginAsync()
+    private async Task LoginAsync(LoginMode mode)
     {
         var label = LoginPrompt.Show(this, "登录新账号", "账号名称：");
         if (label is null) return;
         await RunUiOperationAsync("登录账号", async () =>
         {
-            await _services.Login.LoginAsync(label, duplicate =>
+            await _services.Login.LoginAsync(label, mode, duplicate =>
                 MessageBox.Show($"账号“{duplicate.Label}”已存在，是否更新凭据？", "重复账号", MessageBoxButtons.YesNo) == DialogResult.Yes, default);
             _usage = await _services.Usage.RefreshAllAsync(default);
         });

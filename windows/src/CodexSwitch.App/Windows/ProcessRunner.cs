@@ -13,6 +13,10 @@ public sealed class ProcessRunner : IProcessRunner
             UseShellExecute = false,
             CreateNoWindow = !specification.Visible,
         };
+        if (!string.IsNullOrWhiteSpace(specification.WorkingDirectory))
+        {
+            start.WorkingDirectory = specification.WorkingDirectory;
+        }
         foreach (var argument in specification.Arguments) start.ArgumentList.Add(argument);
         if (!specification.Visible)
         {

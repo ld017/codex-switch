@@ -13,11 +13,13 @@ Windows 10/11 x64 原生桌面面板版，提供 Provider 切换、多个 OpenAI
 启动 Codex Switch 后会打开主面板，可以：
 
 - 查看和切换 OpenAI / Sub2API Provider。
-- 登录、切换、重命名或删除 OpenAI 账号。
+- 登录、切换、重命名或删除 OpenAI 账号。“登录新账号”使用后台浏览器 OAuth；若浏览器回调不便使用，可选择“设备码登录”。
 - 查看每个账号的主/次额度、重置时间和重置卡。
 - 手动刷新额度、打开 Codex、设置开机启动或查看日志。
 
 Provider 或账号切换会重启 Codex，确认框会提前提示正在运行的任务可能中断。Sub2API 必须已配置在 `config.toml`，且本机 `127.0.0.1:8080` 在线；Windows 版不会自动启动 Sub2API 服务。
+
+每次登录都在独立临时 `CODEX_HOME` 中进行，并强制 `cli_auth_credentials_store = "file"`，避免 Windows Credential Manager 绕过账号隔离。登录成功并完成加密导入后，临时明文目录会被删除。
 
 ## 数据与安全
 

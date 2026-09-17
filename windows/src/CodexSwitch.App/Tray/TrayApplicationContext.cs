@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using CodexSwitch.App.Accounts;
 using CodexSwitch.Core.Auth;
+using CodexSwitch.Core.Codex;
 using CodexSwitch.Core.Configuration;
 using CodexSwitch.Core.Diagnostics;
 using CodexSwitch.Core.Presentation;
@@ -54,7 +55,8 @@ public sealed class TrayApplicationContext : ApplicationContext
             ui.Click += async (_, _) => await SwitchAccountAsync((Guid)ui.Tag!); menu.Items.Add(ui);
         }
         if (model.AccountItems.Count == 0) menu.Items.Add(new ToolStripMenuItem("暂无已管理账号") { Enabled = false });
-        menu.Items.Add(Action("登录新账号…", LoginAsync, model.MutationsEnabled));
+        menu.Items.Add(Action("登录新账号…", () => LoginAsync(LoginMode.Browser), model.MutationsEnabled));
+        menu.Items.Add(Action("设备码登录…", () => LoginAsync(LoginMode.DeviceCode), model.MutationsEnabled));
         menu.Items.Add(Action("立即刷新额度", () => RefreshUsageAsync(true), model.MutationsEnabled));
         menu.Items.Add(Action("管理账号…", () => { ShowAccountManager(); return Task.CompletedTask; }, model.MutationsEnabled));
         menu.Items.Add(new ToolStripSeparator());
@@ -111,12 +113,12 @@ public sealed class TrayApplicationContext : ApplicationContext
         finally { await RefreshMenuAsync(); }
     }
 
-    private async Task LoginAsync()
+    private async Task LoginAsync(LoginMode mode)
     {
         var label = LoginPrompt.Show(null, "登录新账号", "账号名称："); if (label is null) return;
         await RunMutationAsync(async token =>
         {
-            await _services.Login.LoginAsync(label, duplicate =>
+            await _services.Login.LoginAsync(label, mode, duplicate =>
                 MessageBox.Show($"账号“{duplicate.Label}”已存在，是否更新凭据？", "重复账号", MessageBoxButtons.YesNo) == DialogResult.Yes, token);
             await RefreshUsageAsync(false);
         });

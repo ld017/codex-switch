@@ -1,6 +1,13 @@
 using CodexSwitch.Core.Auth;
+using CodexSwitch.Core.Diagnostics;
 
 namespace CodexSwitch.Core.Codex;
+
+public enum LoginMode
+{
+    Browser,
+    DeviceCode,
+}
 
 public sealed class LoginException : Exception
 {
@@ -33,10 +40,24 @@ public sealed class LoginService
         string label,
         bool overwriteDuplicate,
         CancellationToken cancellationToken)
-        => await LoginAsync(label, _ => overwriteDuplicate, cancellationToken);
+        => await LoginAsync(label, LoginMode.Browser, _ => overwriteDuplicate, cancellationToken);
 
     public async Task<AccountProfile> LoginAsync(
         string label,
+        LoginMode mode,
+        bool overwriteDuplicate,
+        CancellationToken cancellationToken)
+        => await LoginAsync(label, mode, _ => overwriteDuplicate, cancellationToken);
+
+    public async Task<AccountProfile> LoginAsync(
+        string label,
+        Func<AccountProfile, bool> confirmDuplicate,
+        CancellationToken cancellationToken)
+        => await LoginAsync(label, LoginMode.Browser, confirmDuplicate, cancellationToken);
+
+    public async Task<AccountProfile> LoginAsync(
+        string label,
+        LoginMode mode,
         Func<AccountProfile, bool> confirmDuplicate,
         CancellationToken cancellationToken)
     {
@@ -45,21 +66,39 @@ public sealed class LoginService
         Directory.CreateDirectory(codexHome);
         try
         {
+            await File.WriteAllTextAsync(
+                Path.Combine(codexHome, "config.toml"),
+                "cli_auth_credentials_store = \"file\"\n",
+                cancellationToken);
             var environment = new Dictionary<string, string?>
             {
                 ["CODEX_HOME"] = codexHome,
             };
+            IReadOnlyList<string> arguments = mode == LoginMode.DeviceCode
+                ? ["login", "--device-auth"]
+                : ["login"];
             var result = await _processRunner.RunAsync(
                 new ProcessSpec(
                     _codexCliPath,
-                    ["login"],
+                    arguments,
                     environment,
                     Timeout: TimeSpan.FromMinutes(10),
-                    Visible: true),
+                    Visible: mode == LoginMode.DeviceCode,
+                    WorkingDirectory: codexHome),
                 cancellationToken);
             if (result.ExitCode != 0)
             {
-                throw new LoginException($"Codex login exited with status {result.ExitCode}.");
+                if (result.ExitCode == unchecked((int)0xC000013A))
+                {
+                    throw new LoginException("Codex 登录已取消或登录窗口被关闭。");
+                }
+
+                var detail = SecretRedactor.Redact(
+                    string.IsNullOrWhiteSpace(result.StandardError)
+                        ? result.StandardOutput
+                        : result.StandardError);
+                var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $"：{detail}";
+                throw new LoginException($"Codex 登录失败（退出码 {result.ExitCode}）{suffix}");
             }
 
             var authPath = Path.Combine(codexHome, "auth.json");
