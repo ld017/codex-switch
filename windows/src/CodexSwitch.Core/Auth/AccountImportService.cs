@@ -51,4 +51,23 @@ public sealed class AccountImportService
         await _store.RenameAsync(existing.Id, label, cancellationToken);
         return existing with { Label = label.Trim() };
     }
+
+    public async Task<AccountProfile> ReauthenticateAsync(
+        Guid profileId,
+        byte[] authJson,
+        CancellationToken cancellationToken)
+    {
+        var profile = (await _store.ListAsync(cancellationToken))
+            .FirstOrDefault(candidate => candidate.Id == profileId)
+            ?? throw new KeyNotFoundException($"Unknown account profile: {profileId}");
+        var current = AuthBlob.Parse(await _store.LoadAuthAsync(profileId, cancellationToken));
+        var replacement = AuthBlob.Parse(authJson);
+        if (!current.IdentityMatches(replacement))
+        {
+            throw new AuthBlobException("重新登录的账号与所选账号不一致，原凭据未被修改。");
+        }
+
+        await _store.ReplaceAuthAsync(profileId, authJson, cancellationToken);
+        return profile;
+    }
 }

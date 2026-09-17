@@ -161,6 +161,37 @@ public sealed class AccountStore
         }
     }
 
+    public async Task<Guid?> ReconcileActiveProfileAsync(byte[] liveAuthJson, CancellationToken cancellationToken)
+    {
+        var liveAuth = AuthBlob.Parse(liveAuthJson);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var configuration = LoadConfiguration();
+            Guid? matchingProfileId = null;
+            foreach (var profile in configuration.Profiles)
+            {
+                var storedBytes = _protector.Unprotect(_files.ReadAllBytes(GetEncryptedPath(profile.Id)));
+                if (AuthBlob.Parse(storedBytes).IdentityMatches(liveAuth))
+                {
+                    matchingProfileId = profile.Id;
+                    break;
+                }
+            }
+
+            if (configuration.ActiveProfileId != matchingProfileId)
+            {
+                SaveConfiguration(configuration with { ActiveProfileId = matchingProfileId });
+            }
+
+            return matchingProfileId;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task ReplaceAuthAsync(Guid profileId, byte[] authJson, CancellationToken cancellationToken)
     {
         var auth = AuthBlob.Parse(authJson);

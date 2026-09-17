@@ -49,6 +49,34 @@ public sealed class AccountImportServiceTests
         Assert.Single(await store.ListAsync(default));
     }
 
+    [Fact]
+    public async Task ReauthenticateAsync_replaces_only_the_expected_identity()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.Path, new PassthroughProtector(), new AtomicFileStore());
+        var profile = await store.SaveAsync("Work", TestAuth.OAuth("old", "old-r", "acct-1"), default);
+        var service = new AccountImportService(store);
+
+        var result = await service.ReauthenticateAsync(profile.Id, TestAuth.OAuth("new", "new-r", "acct-1"), default);
+
+        Assert.Equal(profile.Id, result.Id);
+        Assert.Contains("new", System.Text.Encoding.UTF8.GetString(await store.LoadAuthAsync(profile.Id, default)));
+    }
+
+    [Fact]
+    public async Task ReauthenticateAsync_rejects_a_different_account()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.Path, new PassthroughProtector(), new AtomicFileStore());
+        var profile = await store.SaveAsync("Work", TestAuth.OAuth("old", "old-r", "acct-1"), default);
+        var service = new AccountImportService(store);
+
+        await Assert.ThrowsAsync<AuthBlobException>(() =>
+            service.ReauthenticateAsync(profile.Id, TestAuth.OAuth("other", "other-r", "acct-2"), default));
+
+        Assert.Contains("old", System.Text.Encoding.UTF8.GetString(await store.LoadAuthAsync(profile.Id, default)));
+    }
+
     internal sealed class PassthroughProtector : ICredentialProtector
     {
         public byte[] Protect(ReadOnlySpan<byte> plaintext) => plaintext.ToArray();

@@ -61,6 +61,28 @@ public sealed class LoginService
         Func<AccountProfile, bool> confirmDuplicate,
         CancellationToken cancellationToken)
     {
+        var authJson = await AuthenticateAsync(mode, cancellationToken);
+        try
+        {
+            return await _importer.ImportAsync(label, authJson, false, cancellationToken);
+        }
+        catch (DuplicateAccountException duplicate) when (confirmDuplicate(duplicate.Existing))
+        {
+            return await _importer.ImportAsync(label, authJson, true, cancellationToken);
+        }
+    }
+
+    public async Task<AccountProfile> ReauthenticateAsync(
+        AccountProfile profile,
+        LoginMode mode,
+        CancellationToken cancellationToken)
+    {
+        var authJson = await AuthenticateAsync(mode, cancellationToken);
+        return await _importer.ReauthenticateAsync(profile.Id, authJson, cancellationToken);
+    }
+
+    private async Task<byte[]> AuthenticateAsync(LoginMode mode, CancellationToken cancellationToken)
+    {
         Directory.CreateDirectory(_temporaryRoot);
         var codexHome = Path.Combine(_temporaryRoot, $"login-{Guid.NewGuid():N}");
         Directory.CreateDirectory(codexHome);
@@ -109,14 +131,7 @@ public sealed class LoginService
 
             var authJson = await File.ReadAllBytesAsync(authPath, cancellationToken);
             _ = AuthBlob.Parse(authJson);
-            try
-            {
-                return await _importer.ImportAsync(label, authJson, false, cancellationToken);
-            }
-            catch (DuplicateAccountException duplicate) when (confirmDuplicate(duplicate.Existing))
-            {
-                return await _importer.ImportAsync(label, authJson, true, cancellationToken);
-            }
+            return authJson;
         }
         finally
         {

@@ -81,6 +81,21 @@ public sealed class LoginServiceTests
     }
 
     [Fact]
+    public async Task ReauthenticateAsync_updates_selected_profile_without_creating_another_profile()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.File("data"), new AccountImportServiceTests.PassthroughProtector(), new AtomicFileStore());
+        var profile = await store.SaveAsync("Work", TestAuth.OAuth("old", "old-r", "acct-1"), default);
+        var runner = new LoginProcessRunner(TestAuth.OAuth("new", "new-r", "acct-1"));
+        var service = new LoginService("codex.exe", directory.File("tmp"), runner, new AccountImportService(store));
+
+        var result = await service.ReauthenticateAsync(profile, LoginMode.Browser, default);
+
+        Assert.Equal(profile.Id, result.Id);
+        Assert.Single(await store.ListAsync(default));
+    }
+
+    [Fact]
     public async Task LoginAsync_reuses_same_login_result_when_duplicate_is_confirmed()
     {
         using var directory = new TestDirectory();

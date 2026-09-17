@@ -53,6 +53,35 @@ public sealed class AccountStoreTests
         Assert.Equal(active.Id, await store.GetActiveProfileIdAsync(default));
     }
 
+    [Fact]
+    public async Task ReconcileActiveProfileAsync_updates_stale_metadata_from_live_auth()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.Path, new PrefixProtector(), new AtomicFileStore());
+        var firstAuth = TestAuth.OAuth("a1", "r1", "acct-1");
+        var first = await store.SaveAsync("First", firstAuth, default);
+        var second = await store.SaveAsync("Second", TestAuth.OAuth("a2", "r2", "acct-2"), default);
+        await store.SetActiveProfileIdAsync(second.Id, default);
+
+        var matched = await store.ReconcileActiveProfileAsync(firstAuth, default);
+
+        Assert.Equal(first.Id, matched);
+        Assert.Equal(first.Id, await store.GetActiveProfileIdAsync(default));
+    }
+
+    [Fact]
+    public async Task ReconcileActiveProfileAsync_clears_active_when_live_auth_is_unmanaged()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.Path, new PrefixProtector(), new AtomicFileStore());
+        _ = await store.SaveAsync("Managed", TestAuth.OAuth("a1", "r1", "acct-1"), default);
+
+        var matched = await store.ReconcileActiveProfileAsync(TestAuth.OAuth("a2", "r2", "external"), default);
+
+        Assert.Null(matched);
+        Assert.Null(await store.GetActiveProfileIdAsync(default));
+    }
+
     private sealed class PrefixProtector : ICredentialProtector
     {
         public byte[] Protect(ReadOnlySpan<byte> plaintext) => Encoding.UTF8.GetBytes("protected:" + Convert.ToBase64String(plaintext));

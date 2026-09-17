@@ -127,15 +127,16 @@ public sealed class MainForm : Form
         AddAction(layout, "刷新账号额度", () => RefreshUsageAsync(true), 0, 0);
         AddAction(layout, "登录新账号", () => LoginAsync(LoginMode.Browser), 1, 0);
         AddAction(layout, "设备码登录", () => LoginAsync(LoginMode.DeviceCode), 0, 1);
-        AddAction(layout, "切换选中账号", SwitchSelectedAccountAsync, 1, 1);
-        AddAction(layout, "重命名", RenameSelectedAccountAsync, 0, 2);
-        AddAction(layout, "删除账号", RemoveSelectedAccountAsync, 1, 2);
-        AddAction(layout, "打开 Codex", () => RunUiOperationAsync("打开 Codex", () => _services.Lifecycle.LaunchAsync(default)), 0, 3);
-        AddAction(layout, "打开日志目录", () => { OpenLogs(); return Task.CompletedTask; }, 1, 3);
+        AddAction(layout, "重新登录选中账号", ReauthenticateSelectedAccountAsync, 1, 1);
+        AddAction(layout, "切换选中账号", SwitchSelectedAccountAsync, 0, 2);
+        AddAction(layout, "重命名", RenameSelectedAccountAsync, 1, 2);
+        AddAction(layout, "删除账号", RemoveSelectedAccountAsync, 0, 3);
+        AddAction(layout, "打开 Codex", () => RunUiOperationAsync("打开 Codex", () => _services.Lifecycle.LaunchAsync(default)), 1, 3);
+        AddAction(layout, "打开日志目录", () => { OpenLogs(); return Task.CompletedTask; }, 0, 4);
 
         _startup.CheckedChanged += (_, _) => ToggleStartup();
         _startup.Margin = new Padding(8, 10, 8, 4);
-        layout.Controls.Add(_startup, 0, 4);
+        layout.Controls.Add(_startup, 0, 5);
         layout.SetColumnSpan(_startup, 2);
         card.Controls.Add(layout);
         return card;
@@ -150,7 +151,7 @@ public sealed class MainForm : Form
     private async Task ReloadAsync()
     {
         _provider = ReadProvider();
-        _activeProfileId = await _services.Accounts.GetActiveProfileIdAsync(default);
+        _activeProfileId = await ReconcileActiveProfileAsync();
         _accounts = await _services.Accounts.ListAsync(default);
         _selectedProfileId ??= _activeProfileId ?? _accounts.FirstOrDefault()?.Id;
         var sub2Online = await _services.Sub2Api.IsOnlineAsync(default);
@@ -273,8 +274,44 @@ public sealed class MainForm : Form
         if (label is null) return;
         await RunUiOperationAsync("登录账号", async () =>
         {
-            await _services.Login.LoginAsync(label, mode, duplicate =>
+            var profile = await _services.Login.LoginAsync(label, mode, duplicate =>
                 MessageBox.Show($"账号“{duplicate.Label}”已存在，是否更新凭据？", "重复账号", MessageBoxButtons.YesNo) == DialogResult.Yes, default);
+            _selectedProfileId = profile.Id;
+            if (_provider == Provider.OpenAI
+                && MessageBox.Show($"账号“{profile.Label}”登录成功。是否立即切换到该账号并重启 Codex？", "登录完成", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            {
+                if (await CloseCodexAsync())
+                {
+                    await _services.AccountSwitch.SwitchAsync(profile.Id, default);
+                    await _services.Lifecycle.LaunchAsync(default);
+                }
+            }
+            _usage = await _services.Usage.RefreshAllAsync(default);
+        });
+    }
+
+    private async Task ReauthenticateSelectedAccountAsync()
+    {
+        var profile = SelectedProfile();
+        if (profile is null)
+        {
+            MessageBox.Show("请先选择要重新登录的账号。", "Codex Switch");
+            return;
+        }
+
+        if (MessageBox.Show($"将重新登录账号“{profile.Label}”。如果浏览器中选择了不同账号，更新会被拒绝。继续？", "重新登录", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK)
+        {
+            return;
+        }
+
+        await RunUiOperationAsync("重新登录账号", async () =>
+        {
+            await _services.Login.ReauthenticateAsync(profile, LoginMode.Browser, default);
+            if (_provider == Provider.OpenAI && await CloseCodexAsync())
+            {
+                await _services.AccountSwitch.SwitchAsync(profile.Id, default);
+                await _services.Lifecycle.LaunchAsync(default);
+            }
             _usage = await _services.Usage.RefreshAllAsync(default);
         });
     }
@@ -351,6 +388,24 @@ public sealed class MainForm : Form
     {
         try { return ProviderConfigEditor.Read(File.ReadAllText(_services.Paths.ConfigPath)); }
         catch { return Provider.OpenAI; }
+    }
+
+    private async Task<Guid?> ReconcileActiveProfileAsync()
+    {
+        if (_provider != Provider.OpenAI || !File.Exists(_services.Paths.AuthPath))
+        {
+            return await _services.Accounts.GetActiveProfileIdAsync(default);
+        }
+
+        try
+        {
+            var liveAuth = await File.ReadAllBytesAsync(_services.Paths.AuthPath);
+            return await _services.Accounts.ReconcileActiveProfileAsync(liveAuth, default);
+        }
+        catch (Exception error) when (error is AuthBlobException or IOException or UnauthorizedAccessException)
+        {
+            return await _services.Accounts.GetActiveProfileIdAsync(default);
+        }
     }
 
     private void OpenLogs()
