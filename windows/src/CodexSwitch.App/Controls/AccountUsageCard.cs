@@ -20,7 +20,7 @@ public sealed class AccountUsageCard : RoundedPanel
     public AccountUsageCard()
     {
         Height = 154;
-        Margin = new Padding(0, 0, 0, 8);
+        Margin = new Padding(0, 0, 8, 8);
         Padding = new Padding(14, 10, 12, 8);
         BackColor = Color.White;
         CornerRadius = 10;

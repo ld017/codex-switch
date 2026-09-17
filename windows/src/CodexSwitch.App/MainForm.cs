@@ -23,12 +23,13 @@ public sealed class MainForm : Form
     private readonly FlowLayoutPanel _accountsPanel = new()
     {
         Dock = DockStyle.Fill,
-        AutoScroll = true,
-        FlowDirection = FlowDirection.TopDown,
-        WrapContents = false,
+        AutoScroll = false,
+        FlowDirection = FlowDirection.LeftToRight,
+        WrapContents = true,
         BackColor = WindowColor,
-        Padding = new Padding(0, 0, 4, 0),
+        Padding = Padding.Empty,
     };
+    private readonly TableLayoutPanel _root;
     private readonly CheckBox _startup = new() { Text = "登录 Windows 时自动启动", AutoSize = true, Font = new Font("Segoe UI", 10f) };
     private readonly ToolStripStatusLabel _statusText = new() { Text = "就绪" };
     private readonly List<Button> _actionButtons = [];
@@ -54,7 +55,7 @@ public sealed class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         if (startMinimized) WindowState = FormWindowState.Minimized;
 
-        var root = new TableLayoutPanel
+        _root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
@@ -62,23 +63,22 @@ public sealed class MainForm : Form
             Padding = new Padding(20, 16, 20, 10),
             BackColor = WindowColor,
         };
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.Controls.Add(BuildHeader(), 0, 0);
-        root.Controls.Add(BuildConnectionPanel(), 0, 1);
-        root.Controls.Add(BuildAccountHeading(), 0, 2);
-        root.Controls.Add(_accountsPanel, 0, 3);
-        root.Controls.Add(BuildActionsPanel(), 0, 4);
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
+        _root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _root.Controls.Add(BuildHeader(), 0, 0);
+        _root.Controls.Add(BuildConnectionPanel(), 0, 1);
+        _root.Controls.Add(BuildAccountHeading(), 0, 2);
+        _root.Controls.Add(_accountsPanel, 0, 3);
+        _root.Controls.Add(BuildActionsPanel(), 0, 4);
 
         var status = new StatusStrip { SizingGrip = false, BackColor = Color.White };
         status.Items.Add(_statusText);
-        Controls.Add(root);
+        Controls.Add(_root);
         Controls.Add(status);
 
-        _accountsPanel.SizeChanged += (_, _) => ResizeAccountCards();
         Shown += async (_, _) => await InitializeAsync();
         _timer.Tick += async (_, _) => await RefreshUsageAsync(false);
         _timer.Start();
@@ -121,23 +121,24 @@ public sealed class MainForm : Form
     {
         var card = CardPanel();
         card.Margin = new Padding(0, 10, 0, 0);
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, Padding = new Padding(12) };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 3, Padding = new Padding(12) };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33f));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34f));
         AddAction(layout, "刷新账号额度", () => RefreshUsageAsync(true), 0, 0);
         AddAction(layout, "登录新账号", () => LoginAsync(LoginMode.Browser), 1, 0);
-        AddAction(layout, "设备码登录", () => LoginAsync(LoginMode.DeviceCode), 0, 1);
-        AddAction(layout, "重新登录选中账号", ReauthenticateSelectedAccountAsync, 1, 1);
-        AddAction(layout, "切换选中账号", SwitchSelectedAccountAsync, 0, 2);
-        AddAction(layout, "重命名", RenameSelectedAccountAsync, 1, 2);
-        AddAction(layout, "删除账号", RemoveSelectedAccountAsync, 0, 3);
-        AddAction(layout, "打开 Codex", () => RunUiOperationAsync("打开 Codex", () => _services.Lifecycle.LaunchAsync(default)), 1, 3);
-        AddAction(layout, "打开日志目录", () => { OpenLogs(); return Task.CompletedTask; }, 0, 4);
+        AddAction(layout, "设备码登录", () => LoginAsync(LoginMode.DeviceCode), 2, 0);
+        AddAction(layout, "重新登录选中账号", ReauthenticateSelectedAccountAsync, 0, 1);
+        AddAction(layout, "切换选中账号", SwitchSelectedAccountAsync, 1, 1);
+        AddAction(layout, "重命名", RenameSelectedAccountAsync, 2, 1);
+        AddAction(layout, "删除账号", RemoveSelectedAccountAsync, 0, 2);
+        AddAction(layout, "打开 Codex", () => RunUiOperationAsync("打开 Codex", () => _services.Lifecycle.LaunchAsync(default)), 1, 2);
+        AddAction(layout, "打开日志目录", () => { OpenLogs(); return Task.CompletedTask; }, 2, 2);
 
         _startup.CheckedChanged += (_, _) => ToggleStartup();
         _startup.Margin = new Padding(8, 10, 8, 4);
-        layout.Controls.Add(_startup, 0, 5);
-        layout.SetColumnSpan(_startup, 2);
+        layout.Controls.Add(_startup, 0, 3);
+        layout.SetColumnSpan(_startup, 3);
         card.Controls.Add(layout);
         return card;
     }
@@ -165,13 +166,16 @@ public sealed class MainForm : Form
 
     private void RenderAccounts()
     {
+        var workingArea = Screen.FromControl(this).WorkingArea;
+        var plan = DashboardLayoutPlan.Create(_accounts.Count, workingArea.Width, workingArea.Height);
+        ApplyDashboardLayout(plan, workingArea);
         _accountsPanel.SuspendLayout();
         _accountsPanel.Controls.Clear();
         foreach (var account in _accounts)
         {
             _usage.TryGetValue(account.Id, out var state);
             var presentation = AccountUsagePresentation.From(state?.Snapshot, DateTimeOffset.Now);
-            var card = new AccountUsageCard { Selected = account.Id == _selectedProfileId };
+            var card = new AccountUsageCard { Selected = account.Id == _selectedProfileId, Width = plan.CardWidth };
             card.Bind(account.Id, account.Label, presentation, FormatUsageState(state, presentation), account.Id == _activeProfileId);
             card.CardClicked += (_, _) => SelectAccount(card.ProfileId);
             _accountsPanel.Controls.Add(card);
@@ -184,12 +188,12 @@ public sealed class MainForm : Form
                 Text = "还没有已管理账号\n点击下方“登录新账号”开始",
                 AutoSize = false,
                 Height = 90,
+                Width = plan.CardWidth,
                 TextAlign = ContentAlignment.MiddleCenter,
                 ForeColor = MutedColor,
                 Font = new Font("Segoe UI", 10f),
             });
         }
-        ResizeAccountCards();
         _accountsPanel.ResumeLayout();
     }
 
@@ -202,13 +206,20 @@ public sealed class MainForm : Form
         }
     }
 
-    private void ResizeAccountCards()
+    private void ApplyDashboardLayout(DashboardLayoutPlan plan, Rectangle workingArea)
     {
-        var width = Math.Max(280, _accountsPanel.ClientSize.Width - _accountsPanel.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth - 2);
-        foreach (Control control in _accountsPanel.Controls)
+        _root.RowStyles[3].SizeType = SizeType.Absolute;
+        _root.RowStyles[3].Height = plan.AccountAreaHeight;
+        _accountsPanel.Height = plan.AccountAreaHeight;
+        if (WindowState != FormWindowState.Normal)
         {
-            control.Width = width;
+            return;
         }
+
+        var center = new Point(Left + (Width / 2), Top + (Height / 2));
+        Size = new Size(plan.WindowWidth, plan.WindowHeight);
+        Left = Math.Clamp(center.X - (Width / 2), workingArea.Left, workingArea.Right - Width);
+        Top = Math.Clamp(center.Y - (Height / 2), workingArea.Top, workingArea.Bottom - Height);
     }
 
     private static string FormatUsageState(UsageState? state, AccountUsagePresentation presentation)
