@@ -9,7 +9,7 @@ public sealed record DashboardLayoutPlan(
     int WindowHeight,
     int VerticalScrollExtent)
 {
-    private const int CardHeight = 154;
+    private const int CardHeight = 176;
     private const int Gap = 8;
     private const int HorizontalChrome = 80;
     private const int VerticalChrome = 650;

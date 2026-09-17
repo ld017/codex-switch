@@ -20,7 +20,7 @@ public sealed class AccountUsageCard : RoundedPanel
 
     public AccountUsageCard()
     {
-        Height = 154;
+        Height = 176;
         Margin = new Padding(0, 0, 8, 8);
         Padding = new Padding(14, 10, 12, 8);
         BackColor = Color.White;
@@ -32,7 +32,7 @@ public sealed class AccountUsageCard : RoundedPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 4,
-            RowCount = 5,
+            RowCount = 6,
             BackColor = Color.Transparent,
             Margin = Padding.Empty,
         };
@@ -44,6 +44,7 @@ public sealed class AccountUsageCard : RoundedPanel
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 22));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var activeMark = Label(FontStyle.Bold, 13f, Color.FromArgb(48, 119, 184));
@@ -65,11 +66,11 @@ public sealed class AccountUsageCard : RoundedPanel
         layout.Controls.Add(_secondaryPercent, 2, 2);
         layout.Controls.Add(_secondaryReset, 3, 2);
         layout.Controls.Add(_resetCards, 0, 3);
-        layout.SetColumnSpan(_resetCards, 2);
-        _resetExpiry.TextAlign = ContentAlignment.MiddleRight;
-        layout.Controls.Add(_resetExpiry, 2, 3);
-        layout.SetColumnSpan(_resetExpiry, 2);
-        layout.Controls.Add(_status, 0, 4);
+        layout.SetColumnSpan(_resetCards, 4);
+        _resetExpiry.TextAlign = ContentAlignment.MiddleLeft;
+        layout.Controls.Add(_resetExpiry, 0, 4);
+        layout.SetColumnSpan(_resetExpiry, 4);
+        layout.Controls.Add(_status, 0, 5);
         layout.SetColumnSpan(_status, 4);
         Controls.Add(layout);
         WireClick(this);

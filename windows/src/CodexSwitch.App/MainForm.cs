@@ -211,6 +211,7 @@ public sealed class MainForm : Form
         _root.RowStyles[3].SizeType = SizeType.Absolute;
         _root.RowStyles[3].Height = plan.AccountAreaHeight;
         _accountsPanel.Height = plan.AccountAreaHeight;
+        MinimumSize = new Size(plan.WindowWidth, plan.WindowHeight);
         if (WindowState != FormWindowState.Normal)
         {
             return;
