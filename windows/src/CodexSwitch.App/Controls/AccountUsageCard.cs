@@ -2,7 +2,7 @@ using CodexSwitch.Core.Presentation;
 
 namespace CodexSwitch.App.Controls;
 
-public sealed class AccountUsageCard : Panel
+public sealed class AccountUsageCard : RoundedPanel
 {
     private readonly Label _name = Label(FontStyle.Bold, 11f);
     private readonly Label _plan = Label(FontStyle.Regular, 9f, Color.FromArgb(92, 99, 110));
@@ -19,10 +19,11 @@ public sealed class AccountUsageCard : Panel
 
     public AccountUsageCard()
     {
-        Height = 148;
+        Height = 154;
         Margin = new Padding(0, 0, 0, 8);
-        Padding = new Padding(16, 12, 14, 10);
+        Padding = new Padding(14, 10, 12, 8);
         BackColor = Color.White;
+        CornerRadius = 10;
         Cursor = Cursors.Hand;
         DoubleBuffered = true;
 
@@ -34,10 +35,10 @@ public sealed class AccountUsageCard : Panel
             BackColor = Color.Transparent,
             Margin = Padding.Empty,
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 28));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 24));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 52));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 80));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 58));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 94));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 25));
@@ -51,6 +52,7 @@ public sealed class AccountUsageCard : Panel
         layout.Controls.Add(_name, 1, 0);
         layout.SetColumnSpan(_name, 2);
         _plan.TextAlign = ContentAlignment.MiddleRight;
+        _plan.AutoEllipsis = true;
         layout.Controls.Add(_plan, 3, 0);
 
         layout.Controls.Add(RowLabel("短"), 0, 1);
@@ -89,7 +91,8 @@ public sealed class AccountUsageCard : Panel
         ProfileId = profileId;
         _active = active;
         _name.Text = accountName;
-        _plan.Text = $"{presentation.CreditsText}  {presentation.PlanText}";
+        _plan.Text = $"{presentation.CreditsText} · {presentation.PlanText}";
+        _plan.Tag = _plan.Text;
         BindBar(_primaryBar, _primaryPercent, _primaryReset, presentation.Primary);
         BindBar(_secondaryBar, _secondaryPercent, _secondaryReset, presentation.Secondary);
         _resetCards.Text = "↻  " + presentation.ResetCreditsText;
@@ -103,12 +106,11 @@ public sealed class AccountUsageCard : Panel
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        base.OnPaint(e);
-        var border = _active
+        BorderColor = _active
             ? Color.FromArgb(80, 146, 207)
             : _selected ? Color.FromArgb(100, 155, 204) : Color.FromArgb(222, 226, 232);
-        using var pen = new Pen(border, _active || _selected ? 2 : 1);
-        e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+        BorderWidth = _active || _selected ? 2 : 1;
+        base.OnPaint(e);
         if (_active)
         {
             using var accent = new SolidBrush(Color.FromArgb(80, 146, 207));
@@ -130,7 +132,9 @@ public sealed class AccountUsageCard : Panel
         bar.Percent = value.Percent;
         bar.Level = value.Level;
         percent.Text = value.PercentText;
+        percent.TextAlign = ContentAlignment.MiddleRight;
         reset.Text = value.ResetText;
+        reset.TextAlign = ContentAlignment.MiddleRight;
     }
 
     private static Label RowLabel(string text) => new()
@@ -144,7 +148,7 @@ public sealed class AccountUsageCard : Panel
 
     private static Label Label(FontStyle style, float size, Color? color = null) => new()
     {
-        AutoEllipsis = true,
+        AutoEllipsis = false,
         Dock = DockStyle.Fill,
         TextAlign = ContentAlignment.MiddleLeft,
         Font = new Font("Segoe UI", size, style),

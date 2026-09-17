@@ -15,8 +15,6 @@ public sealed class MainForm : Form
     private static readonly Color WindowColor = Color.FromArgb(245, 247, 250);
     private static readonly Color TextColor = Color.FromArgb(39, 43, 49);
     private static readonly Color MutedColor = Color.FromArgb(112, 119, 129);
-    private static readonly Color AccentColor = Color.FromArgb(55, 126, 190);
-
     private readonly AppServices _services;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 5 * 60 * 1000 };
     private readonly Label _providerStatus = StatusLabel();
@@ -46,9 +44,9 @@ public sealed class MainForm : Form
     {
         _services = services;
         Text = "Codex Switch";
-        Width = 520;
+        Width = 560;
         Height = 820;
-        MinimumSize = new Size(440, 620);
+        MinimumSize = new Size(500, 640);
         BackColor = WindowColor;
         ForeColor = TextColor;
         Font = new Font("Segoe UI", 9f);
@@ -89,23 +87,10 @@ public sealed class MainForm : Form
 
     private Control BuildHeader()
     {
-        var panel = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Margin = new Padding(0, 0, 0, 12) };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 44));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        var icon = new PictureBox
-        {
-            Image = (Icon ?? SystemIcons.Application).ToBitmap(),
-            SizeMode = PictureBoxSizeMode.Zoom,
-            Width = 32,
-            Height = 32,
-            Margin = new Padding(0, 4, 10, 0),
-        };
-        var titleArea = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+        var titleArea = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(4, 0, 0, 12) };
         titleArea.Controls.Add(new Label { Text = "Codex Switch", AutoSize = true, Font = new Font("Segoe UI", 18f, FontStyle.Bold), ForeColor = TextColor });
         titleArea.Controls.Add(new Label { Text = "Provider 与 OpenAI 账号控制台", AutoSize = true, Font = new Font("Segoe UI", 9f), ForeColor = MutedColor });
-        panel.Controls.Add(icon, 0, 0);
-        panel.Controls.Add(titleArea, 1, 0);
-        return panel;
+        return titleArea;
     }
 
     private Control BuildConnectionPanel()
@@ -139,14 +124,14 @@ public sealed class MainForm : Form
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 2, Padding = new Padding(12) };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        AddAction(layout, "↻  刷新账号额度", () => RefreshUsageAsync(true), 0, 0);
-        AddAction(layout, "+  登录新账号", () => LoginAsync(LoginMode.Browser), 1, 0);
-        AddAction(layout, "#  设备码登录", () => LoginAsync(LoginMode.DeviceCode), 0, 1);
-        AddAction(layout, "⇄  切换选中账号", SwitchSelectedAccountAsync, 1, 1);
-        AddAction(layout, "✎  重命名", RenameSelectedAccountAsync, 0, 2);
-        AddAction(layout, "×  删除账号", RemoveSelectedAccountAsync, 1, 2);
-        AddAction(layout, "↗  打开 Codex", () => RunUiOperationAsync("打开 Codex", () => _services.Lifecycle.LaunchAsync(default)), 0, 3);
-        AddAction(layout, "▣  打开日志目录", () => { OpenLogs(); return Task.CompletedTask; }, 1, 3);
+        AddAction(layout, "刷新账号额度", () => RefreshUsageAsync(true), 0, 0);
+        AddAction(layout, "登录新账号", () => LoginAsync(LoginMode.Browser), 1, 0);
+        AddAction(layout, "设备码登录", () => LoginAsync(LoginMode.DeviceCode), 0, 1);
+        AddAction(layout, "切换选中账号", SwitchSelectedAccountAsync, 1, 1);
+        AddAction(layout, "重命名", RenameSelectedAccountAsync, 0, 2);
+        AddAction(layout, "删除账号", RemoveSelectedAccountAsync, 1, 2);
+        AddAction(layout, "打开 Codex", () => RunUiOperationAsync("打开 Codex", () => _services.Lifecycle.LaunchAsync(default)), 0, 3);
+        AddAction(layout, "打开日志目录", () => { OpenLogs(); return Task.CompletedTask; }, 1, 3);
 
         _startup.CheckedChanged += (_, _) => ToggleStartup();
         _startup.Margin = new Padding(8, 10, 8, 4);
@@ -422,11 +407,12 @@ public sealed class MainForm : Form
         return button;
     }
 
-    private static Panel CardPanel() => new()
+    private static RoundedPanel CardPanel() => new()
     {
         Dock = DockStyle.Top,
         AutoSize = true,
         BackColor = Color.White,
+        CornerRadius = 10,
         Margin = Padding.Empty,
     };
 

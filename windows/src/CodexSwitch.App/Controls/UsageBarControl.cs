@@ -13,6 +13,7 @@ public sealed class UsageBarControl : Control
         DoubleBuffered = true;
         Height = 8;
         MinimumSize = new Size(80, 8);
+        Dock = DockStyle.Fill;
         Margin = new Padding(0, 6, 0, 6);
     }
 
