@@ -1,5 +1,11 @@
 # Codex Switch
 
+**macOS 最新版：[v2.3.1 下载与更新说明](https://github.com/ld017/codex-switch/releases/tag/v2.3.1)**（Apple Silicon；ad-hoc 签名，未公证）。
+
+![Codex Switch 菜单，账号邮箱已遮盖](docs/images/codex-switch-menu-redacted.png)
+
+截图经图像工具遮盖账号邮箱，展示 2.3.0 累计用量布局；2.3.1 另增加本月统计、日期截至提示与账号覆盖数，详见[发布说明](docs/releases/v2.3.1.md)。
+
 `Codex Switch` 是一个 macOS 菜单栏工具和 Windows 桌面面板应用，用于统一管理两类独立状态：
 
 - Codex provider：`OpenAI` / `Sub2API`
