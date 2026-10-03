@@ -57,6 +57,18 @@ struct RPCRateLimitsResponse: Decodable {
     let rateLimitResetCredits: RPCRateLimitResetCredits?
 }
 
+struct RPCTokenActivityResponse: Decodable {
+    struct Summary: Decodable {
+        let lifetimeTokens: Int64?
+    }
+    let summary: Summary?
+    let dailyUsageBuckets: [TokenActivity.Day]?
+
+    var activity: TokenActivity {
+        TokenActivity(lifetimeTokens: summary?.lifetimeTokens, dailyUsageBuckets: dailyUsageBuckets)
+    }
+}
+
 struct RPCRateLimitResetCredits: Decodable {
     let availableCount: Int
     let credits: [RPCRateLimitResetCredit]
@@ -308,7 +320,7 @@ private final class CodexRPCClient {
         executablePath: String,
         environment: [String: String],
         initializeTimeoutSeconds: TimeInterval = 8,
-        requestTimeoutSeconds: TimeInterval = 3) throws {
+        requestTimeoutSeconds: TimeInterval = 15) throws {
         self.initializeTimeoutSeconds = initializeTimeoutSeconds
         self.requestTimeoutSeconds = requestTimeoutSeconds
 
@@ -319,7 +331,7 @@ private final class CodexRPCClient {
 
         self.process.executableURL = URL(fileURLWithPath: executablePath)
         // No `--ask-for-approval`: this app-server only answers
-        // `account/rateLimits/read`, so an approval policy has nothing to
+        // account quota and token-activity reads, so an approval policy has nothing to
         // govern, and its accepted values change between Codex CLI releases
         // (0.151 dropped `untrusted`, which made every fetch die at argv
         // parsing and left the menu showing week-old cached usage).
@@ -381,6 +393,12 @@ private final class CodexRPCClient {
     func fetchRateLimits() async throws -> RPCRateLimitsResponse {
         let message = try await self.request(method: "account/rateLimits/read")
         return try self.decodeResult(from: message)
+    }
+
+    func fetchTokenActivity() async throws -> TokenActivity {
+        let message = try await self.request(method: "account/usage/read", timeout: 15)
+        let response: RPCTokenActivityResponse = try self.decodeResult(from: message)
+        return response.activity
     }
 
     func shutdown() {
@@ -541,9 +559,18 @@ public enum CLIUsageFetcher {
 
         try await rpc.initialize(clientName: clientName, clientVersion: clientVersion)
         let response = try await rpc.fetchRateLimits()
-        return try self.makeSnapshot(
+        var snapshot = try self.makeSnapshot(
             from: response.rateLimits,
             resetCredits: response.rateLimitResetCredits)
+        // A missing/unsupported activity endpoint must not discard valid quotas.
+        do {
+            snapshot.tokenActivity = try await rpc.fetchTokenActivity()
+            snapshot.tokenActivityUnavailable = snapshot.tokenActivity?.lifetimeTokens == nil
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            snapshot.tokenActivityUnavailable = true
+        }
+        return snapshot
     }
 
     private static func makeTemporaryCodexHome(profileId: String) throws -> URL {

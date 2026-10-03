@@ -22,10 +22,12 @@ enum Palette {
     static let mid = Color(red: 0.70, green: 0.55, blue: 0.35)
 }
 
-func progressColor(for percent: Int) -> Color {
-    if percent >= 90 { return Palette.danger }
-    if percent >= 70 { return Palette.mid }
-    return Palette.success
+func progressColor(forRemaining percent: Int) -> Color {
+    switch RemainingQuotaPresentation.urgency(forRemaining: percent) {
+    case .normal: return Palette.success
+    case .warning: return Palette.mid
+    case .critical: return Palette.danger
+    }
 }
 
 func usageWindowLabel(durationMins: Int?, legacyLabel: String) -> String {
@@ -208,7 +210,7 @@ struct UsageBar: View {
 
 struct UsageRow: View {
     let label: String
-    let percent: Int
+    let remainingPercent: Int
     let resetAt: Date?
     let isHighlighted: Bool
 
@@ -219,9 +221,11 @@ struct UsageRow: View {
                 .foregroundStyle(self.isHighlighted ? .secondary : .tertiary)
                 .frame(width: 16, alignment: .leading)
 
-            UsageBar(percent: Double(self.percent), tint: progressColor(for: self.percent))
+            UsageBar(
+                percent: Double(self.remainingPercent),
+                tint: progressColor(forRemaining: self.remainingPercent))
 
-            Text("\(self.percent)%")
+            Text("\(self.remainingPercent)%")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(self.isHighlighted ? .primary : .secondary)
                 .frame(width: 30, alignment: .trailing)
@@ -239,14 +243,26 @@ struct UsageHeaderView: View {
     let updatedAt: Date?
     let failingProfiles: Int
     let trackedProfiles: Int
+    var tokenSummary: String = "Token 合计：未获取"
+    var tokenCoverage: String = ""
 
-    static let baseHeight: CGFloat = 42
-    static let failureHeight: CGFloat = 57
+    static let baseHeight: CGFloat = 73
+    static let failureHeight: CGFloat = 88
 
     var body: some View {
         VStack(spacing: 2) {
-            Text("OpenAI 账号额度")
+            Text("OpenAI 账号剩余额度")
                 .font(.system(size: 12, weight: .semibold))
+
+            Text(tokenSummary)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Text(tokenCoverage)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
 
             Text(self.statusLabel)
                 .font(.system(size: 10))
@@ -304,6 +320,15 @@ struct ProfileCardView: View {
                         .lineLimit(1)
                 }
                 self.statusContent
+                Text(TokenUsagePresentation.cardLabel(self.status))
+                    .font(.system(size: 10))
+                    .foregroundStyle(self.metadataColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Text(TokenUsagePresentation.cardNote(self.status))
+                    .font(.system(size: 9))
+                    .foregroundStyle(self.metadataColor)
+                    .lineLimit(1)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -385,7 +410,8 @@ struct ProfileCardView: View {
                     label: usageWindowLabel(
                         durationMins: snap.primaryWindowDurationMins,
                         legacyLabel: "5时"),
-                    percent: snap.primaryUsedPercent,
+                    remainingPercent: RemainingQuotaPresentation.percent(
+                        fromUsed: snap.primaryUsedPercent),
                     resetAt: snap.primaryResetAt,
                     isHighlighted: self.isActive || self.isHovered)
             }
@@ -394,7 +420,8 @@ struct ProfileCardView: View {
                     label: usageWindowLabel(
                         durationMins: snap.secondaryWindowDurationMins,
                         legacyLabel: "周"),
-                    percent: snap.secondaryUsedPercent,
+                    remainingPercent: RemainingQuotaPresentation.percent(
+                        fromUsed: snap.secondaryUsedPercent),
                     resetAt: snap.secondaryResetAt,
                     isHighlighted: self.isActive || self.isHovered)
             }

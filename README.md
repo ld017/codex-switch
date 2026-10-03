@@ -3,7 +3,7 @@
 `Codex Switch` 是一个 macOS 菜单栏工具和 Windows 桌面面板应用，用于统一管理两类独立状态：
 
 - Codex provider：`OpenAI` / `Sub2API`
-- OpenAI 账号：多账号登录、切换和逐账号额度监控，包括可用重置卡数量和最近一张的到期时间
+- OpenAI 账号：多账号登录、切换和逐账号剩余额度监控，包括可用重置卡数量和最近一张的到期时间
 
 它同时保留原 Codex Provider Switcher 的共享任务/项目代理，所有 provider 继续共用 `~/.codex` 中的任务、历史、项目、插件和设置。
 
@@ -12,7 +12,11 @@
 - provider 切换只修改 `~/.codex/config.toml` 顶层的 `model_provider`，并保留原子写入、备份、验证和失败回滚。
 - OpenAI 账号切换只在当前 provider 为 `OpenAI` 时执行，避免一次操作同时改写 provider 与登录态。
 - 额度刷新在临时 `CODEX_HOME` 内运行，其中的 `model_provider` 强制设为 `openai`。因此即使桌面 Codex 当前连接 Sub2API，也不会用 Sub2API 数据冒充 OpenAI 账号额度。
+- Codex 返回的是已用百分比；菜单栏图标、账号卡片数字和进度条统一换算为剩余百分比。剩余不高于 `30%` 时警告，不高于 `10%` 时显示为紧急。
 - 重置卡使用 `rateLimitResetCredits.availableCount` 作为可用数量；到期时间取所有 `available` 卡中最早的 `expiresAt`，用本机时区显示为“最近到期”。
+- 累计 Token 使用官方 `account/usage/read` 返回的 `summary.lifetimeTokens`，不是从额度百分比换算。各账号卡片显示累计值，“Token 用量详情”提供精确值、读取时间和服务端返回的每日记录。统计可能延迟，缺项不视为零，也不代表普通 ChatGPT 聊天或 Sub2API 的用量。
+- Token 合计按已保存的账号身份去重，未知身份和没有累计值的账号不计入，并显示未计入数量。查询失败可保留旧值并标记缓存；Token 接口不可用不会使已取得的额度数据失效。
+- 本月按本机当前自然月匹配官方日期桶，仅汇总已返回记录，统一用“亿 Token”；每日明细用“百万 Token”，均保留两位小数。未返回本月记录的账号显示未获取，合计标注部分覆盖；小于显示精度的正数用 `<0.01`，避免误显示为零。
 - 切换 provider 或 OpenAI 账号都会重启 Codex，菜单会在操作前明确警告当前任务将中断。
 
 ## 账号数据
@@ -24,7 +28,7 @@
 - 目录权限：`0700`
 - 凭据文件权限：`0600`
 
-菜单、日志和调试输出不显示 token。
+菜单、日志和调试输出不显示认证令牌；Token 用量只显示数量。
 
 ## 构建与安装
 

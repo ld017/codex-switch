@@ -12,6 +12,8 @@ public struct UsageSnapshot: Codable, Equatable {
     public let secondaryWindowDurationMins: Int?
     public let resetCreditsAvailable: Int?
     public let nextResetCreditExpiresAt: Date?
+    public var tokenActivity: TokenActivity?
+    public var tokenActivityUnavailable: Bool?
 
     public init(
         planType: String?,
@@ -37,6 +39,24 @@ public struct UsageSnapshot: Codable, Equatable {
         self.secondaryWindowDurationMins = secondaryWindowDurationMins
         self.resetCreditsAvailable = resetCreditsAvailable
         self.nextResetCreditExpiresAt = nextResetCreditExpiresAt
+    }
+}
+
+/// Server-reported Codex activity, independent of rate-limit percentages.
+public struct TokenActivity: Codable, Equatable {
+    public struct Day: Codable, Equatable {
+        public let startDate: String
+        public let tokens: Int64
+    }
+
+    public let lifetimeTokens: Int64?
+    public let dailyUsageBuckets: [Day]?
+    public let fetchedAt: Date
+
+    public init(lifetimeTokens: Int64?, dailyUsageBuckets: [Day]?, fetchedAt: Date = Date()) {
+        self.lifetimeTokens = lifetimeTokens.flatMap { $0 >= 0 ? $0 : nil }
+        self.dailyUsageBuckets = dailyUsageBuckets?.filter { $0.tokens >= 0 }
+        self.fetchedAt = fetchedAt
     }
 }
 

@@ -276,7 +276,12 @@ final class UsageProvider {
                 clientVersion: AppInfo.version)
             for context in fetchGroup.contexts {
                 diagnostics[context.id]?.lastError = nil
-                await finalize(context, .available(snapshot), decision: "available")
+                var merged = snapshot
+                if snapshot.tokenActivityUnavailable == true, snapshot.tokenActivity?.lifetimeTokens == nil,
+                   let cached = context.cached?.tokenActivity {
+                    merged.tokenActivity = cached
+                }
+                await finalize(context, .available(merged), decision: "available")
                 AppLogger.info("Usage refresh succeeded", metadata: ["profile": context.id])
             }
         } catch is CancellationError {

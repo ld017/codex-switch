@@ -12,20 +12,24 @@ enum IconRenderer {
 
     // MARK: - Public
 
-    static func render(primaryPercent: Int, secondaryPercent: Int) -> NSImage {
+    static func render(primaryRemainingPercent: Int, secondaryRemainingPercent: Int) -> NSImage {
         let font = NSFont.monospacedDigitSystemFont(ofSize: Self.textFontSize, weight: .semibold)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: NSColor.black,
         ]
 
-        let topStr = NSAttributedString(string: String(format: "%02d", primaryPercent), attributes: attrs)
-        let bottomStr = NSAttributedString(string: String(format: "%02d", secondaryPercent), attributes: attrs)
+        let topStr = NSAttributedString(
+            string: String(format: "%02d", primaryRemainingPercent),
+            attributes: attrs)
+        let bottomStr = NSAttributedString(
+            string: String(format: "%02d", secondaryRemainingPercent),
+            attributes: attrs)
         let topSize = topStr.size()
         let bottomSize = bottomStr.size()
 
-        let topUrgency = Urgency(percent: primaryPercent)
-        let bottomUrgency = Urgency(percent: secondaryPercent)
+        let topUrgency = Urgency(remainingPercent: primaryRemainingPercent)
+        let bottomUrgency = Urgency(remainingPercent: secondaryRemainingPercent)
 
         let contentWidth = max(
             Self.rowWidth(textSize: topSize, urgency: topUrgency),
@@ -60,10 +64,12 @@ enum IconRenderer {
     private enum Urgency {
         case normal, warning, critical
 
-        init(percent: Int) {
-            if percent >= 90 { self = .critical }
-            else if percent >= 70 { self = .warning }
-            else { self = .normal }
+        init(remainingPercent: Int) {
+            switch RemainingQuotaPresentation.urgency(forRemaining: remainingPercent) {
+            case .normal: self = .normal
+            case .warning: self = .warning
+            case .critical: self = .critical
+            }
         }
 
         var boxHorizontalPadding: CGFloat? {

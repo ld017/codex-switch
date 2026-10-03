@@ -101,6 +101,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
         configureStatusItem()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, let item = self.statusItem else { return }
+            AppLogger.info("Menu bar item diagnostics", metadata: [
+                "visible": String(item.isVisible),
+                "length": String(Double(item.length)),
+                "windowVisible": String(item.button?.window?.isVisible ?? false),
+                "windowFrame": item.button?.window.map { NSStringFromRect($0.frame) } ?? "none",
+                "buttonFrame": item.button.map { NSStringFromRect($0.frame) } ?? "none",
+                "imageSize": item.button?.image.map { NSStringFromSize($0.size) } ?? "none",
+                "screens": NSScreen.screens.map { NSStringFromRect($0.frame) }.joined(separator: ";"),
+            ])
+        }
         if enableLoginItemOnLaunch || loginItems.isEnabled {
             do {
                 try loginItems.enable()
@@ -163,9 +175,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func configureStatusItem() {
+        // Keep the item reachable when login restores many menu bar apps.
+        // AppKit persists subsequent user moves under this autosave name.
+        let autosaveName = "CodexSwitchStatusItem"
+        let positionKey = "NSStatusItem Preferred Position \(autosaveName)"
+        if UserDefaults.standard.object(forKey: positionKey) == nil {
+            UserDefaults.standard.set(200, forKey: positionKey)
+        }
         statusItem = NSStatusBar.system.statusItem(
             withLength: NSStatusItem.squareLength
         )
+        statusItem.autosaveName = autosaveName
         if let button = statusItem.button {
             button.image = IconRenderer.renderEmpty()
             button.imageScaling = .scaleNone

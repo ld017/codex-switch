@@ -110,6 +110,8 @@ final class AccountManager: NSObject {
             }
         }
 
+        self.addTokenDetails(to: menu)
+
         menu.addItem(.separator())
 
         let refresh = NSMenuItem(
@@ -165,11 +167,19 @@ final class AccountManager: NSObject {
             return true
         }
         let failing = tracked.filter { self.store.refreshDiagnostics[$0.id]?.lastError != nil }
+        let tokenSummary = TokenUsagePresentation.summary(tracked.map { profile in
+            let status = self.store.statuses[profile.id] ?? .notSetUp
+            return .init(identity: self.store.savedAuthFingerprint(for: profile.id),
+                         activity: status.snapshot?.tokenActivity,
+                         cached: TokenUsagePresentation.isCached(status))
+        })
         let header = UsageHeaderView(
             isRefreshing: self.usageProvider.isRefreshing,
             updatedAt: updatedAt,
             failingProfiles: failing.count,
-            trackedProfiles: tracked.count)
+            trackedProfiles: tracked.count,
+            tokenSummary: tokenSummary.values,
+            tokenCoverage: tokenSummary.coverage)
         let host = NSHostingView(rootView: header)
         host.frame = NSRect(
             x: 0,
@@ -223,7 +233,51 @@ final class AccountManager: NSObject {
         }
         if status.snapshot?.resetCreditsAvailable != nil { height += 15 }
         if hasDuplicate { height += 14 }
-        return height
+        return height + 32
+    }
+
+    private func addTokenDetails(to menu: NSMenu) {
+        let root = NSMenuItem(title: "Token 用量详情", action: nil, keyEquivalent: "")
+        let details = NSMenu()
+        func note(_ title: String, in target: NSMenu) {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            target.addItem(item)
+        }
+        note("官方 Codex 统计，可能延迟更新", in: details)
+        note("不含其他渠道；每日缺项不代表零", in: details)
+        note("本月：当前自然月的已返回记录", in: details)
+        for profile in self.store.config.profiles {
+            let item = NSMenuItem(title: profile.label, action: nil, keyEquivalent: "")
+            let account = NSMenu()
+            let status = self.store.statuses[profile.id] ?? .notSetUp
+            if let activity = status.snapshot?.tokenActivity {
+                if let total = activity.lifetimeTokens {
+                    note("累计：\(TokenUsagePresentation.exact(total)) Token"
+                         + (TokenUsagePresentation.isCached(status) ? "（缓存）" : ""), in: account)
+                } else {
+                    note("累计：未获取", in: account)
+                }
+                note("读取于：\(DateFormatter.profileDetailTimestamp.string(from: activity.fetchedAt))", in: account)
+                if let month = TokenUsagePresentation.monthUsage(activity) {
+                    note("本月：\(TokenUsagePresentation.hundredMillions(month.tokens)) Token", in: account)
+                    note("已返回记录截至：\(month.through)", in: account)
+                } else {
+                    note("本月：未获取（不代表零消耗）", in: account)
+                }
+                let days = activity.dailyUsageBuckets ?? []
+                if days.isEmpty { note("每日用量：未获取", in: account) }
+                for day in days.sorted(by: { $0.startDate > $1.startDate }) {
+                    note("\(day.startDate)：\(TokenUsagePresentation.millions(day.tokens)) Token", in: account)
+                }
+            } else {
+                note(TokenUsagePresentation.cardLabel(status), in: account)
+            }
+            item.submenu = account
+            details.addItem(item)
+        }
+        root.submenu = details
+        menu.addItem(root)
     }
 
     private func duplicateSummary(for profileID: String) -> String? {
@@ -472,8 +526,10 @@ final class AccountManager: NSObject {
             return
         }
         self.onIconChange(IconRenderer.render(
-            primaryPercent: snapshot.primaryUsedPercent,
-            secondaryPercent: snapshot.secondaryUsedPercent))
+            primaryRemainingPercent: RemainingQuotaPresentation.percent(
+                fromUsed: snapshot.primaryUsedPercent),
+            secondaryRemainingPercent: RemainingQuotaPresentation.percent(
+                fromUsed: snapshot.secondaryUsedPercent)))
     }
 
     private func syncActiveProfile(force: Bool = false) {
