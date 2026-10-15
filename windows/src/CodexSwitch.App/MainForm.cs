@@ -16,12 +16,14 @@ public sealed class MainForm : Form
     private static readonly Color TextColor = AppTheme.Text;
     private static readonly Color MutedColor = AppTheme.Muted;
     private readonly AppServices _services;
+    private readonly Action<string, Exception>? _errorPresenter;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 60 * 1000 };
     private readonly CancellationTokenSource _lifetime = new();
     private CancellationTokenSource? _refreshCancellation;
     private Task _refreshTask = Task.CompletedTask;
     private Task _operationTask = Task.CompletedTask;
     private bool _closingAfterCleanup;
+    private bool _closingInProgress;
     private bool _refreshing;
     private int _refreshSequence;
     private bool _initialLayoutApplied;
@@ -60,16 +62,17 @@ public sealed class MainForm : Form
     private bool _busy;
     private bool _syncingStartup;
 
-    public MainForm(AppServices services, bool startMinimized)
+    public MainForm(AppServices services, bool startMinimized, Action<string, Exception>? errorPresenter = null)
     {
         // Keep the 96-DPI baseline until every static child has been constructed.
         // Otherwise early property setters can consume autoscale before children exist.
         SuspendLayout();
         _services = services;
+        _errorPresenter = errorPresenter;
         _totalTokens = _tokenOverview.TotalLabel;
         _monthTokens = _tokenOverview.MonthLabel;
         _tokenCoverage = _tokenOverview.CoverageLabel;
-        Text = "Codex Switch 1.0.4";
+        Text = "Codex Switch 1.0.5";
         DoubleBuffered = true;
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96, 96);
@@ -110,31 +113,58 @@ public sealed class MainForm : Form
         Controls.Add(status);
         _accountsPanel.SizeChanged += (_, _) => LayoutAccountCards();
 
-        Shown += async (_, _) => await InitializeAsync();
-        _timer.Tick += async (_, _) => await RefreshUsageAsync(false);
+        Shown += (_, _) => _ = RunUiEventAsync("初始化", InitializeAsync);
+        _timer.Tick += (_, _) => _ = RunUiEventAsync("后台刷新", () => RefreshUsageAsync(false), showErrors: false);
         _timer.Start();
-        FormClosing += async (_, args) =>
+        FormClosing += (_, args) =>
         {
             if (_closingAfterCleanup) return;
-            _timer.Stop();
-            _lifetime.Cancel();
-            _refreshCancellation?.Cancel();
-            if (!_refreshing && !_busy) return;
-            args.Cancel = true;
-            try { await Task.WhenAll(_refreshTask, _operationTask); }
-            catch (Exception error) { WriteLog("关闭前清理", error.Message); }
-            _closingAfterCleanup = true;
-            Close();
+            args.Cancel = _refreshing || _busy || _closingInProgress;
+            if (_closingInProgress) return;
+            try
+            {
+                _timer.Stop();
+                _lifetime.Cancel();
+                _refreshCancellation?.Cancel();
+                if (!args.Cancel) return;
+                _closingInProgress = true;
+                _ = CompleteCloseAsync();
+            }
+            catch (Exception error) { WriteLog("关闭窗口", error.ToString()); }
         };
-        FormClosed += (_, _) => { _timer.Dispose(); _lifetime.Cancel(); _refreshCancellation?.Cancel(); };
+        FormClosed += (_, _) =>
+        {
+            try { _timer.Dispose(); _lifetime.Cancel(); _refreshCancellation?.Cancel(); }
+            catch (Exception error) { WriteLog("关闭清理", error.ToString()); }
+        };
         Disposed += (_, _) => _timer.Dispose();
         ResumeLayout(false);
         PerformLayout();
         Resize += (_, _) =>
         {
-            if (!_initialLayoutApplied && WindowState == FormWindowState.Normal) RenderAccounts();
+            try { if (!_initialLayoutApplied && WindowState == FormWindowState.Normal) RenderAccounts(); }
+            catch (Exception error) { WriteLog("初始化窗口布局", error.ToString()); }
         };
     }
+
+    private async Task CompleteCloseAsync()
+    {
+        try { await Task.WhenAll(_refreshTask, _operationTask); }
+        catch (Exception error) { WriteLog("关闭前清理", error.ToString()); }
+        try
+        {
+            _closingAfterCleanup = true;
+            if (!IsDisposed) Close();
+        }
+        catch (Exception error) { WriteLog("完成关闭", error.ToString()); }
+    }
+
+    private Task RunUiEventAsync(string name, Func<Task> action, bool showErrors = true)
+        => UiExceptionGuard.RunAsync(action, error =>
+        {
+            if (showErrors) ShowError(name, error);
+            else WriteLog(name, error.ToString());
+        }, _lifetime.Token);
 
     private Control BuildHeader()
     {
@@ -154,7 +184,7 @@ public sealed class MainForm : Form
             if (subtitle.MaximumSize != maximum) subtitle.MaximumSize = maximum;
         };
         header.Controls.Add(titleArea, 0, 0);
-        header.Controls.Add(new Label { Text = "1.0.4", AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = MutedColor, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Segoe UI", 8f) }, 1, 0);
+        header.Controls.Add(new Label { Text = "1.0.5", AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = MutedColor, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Segoe UI", 8f) }, 1, 0);
         return header;
     }
 
@@ -234,11 +264,11 @@ public sealed class MainForm : Form
         var menu = new ContextMenuStrip { Font = new Font("Segoe UI", 9f) };
         var rename = menu.Items.Add("重命名所选账号");
         rename.Enabled = SelectedProfile() is not null;
-        rename.Click += async (_, _) => await RenameSelectedAccountAsync();
+        rename.Click += (_, _) => _ = RunUiEventAsync("重命名账号", RenameSelectedAccountAsync);
         var delete = menu.Items.Add("删除所选账号");
         delete.Enabled = SelectedProfile() is not null;
         delete.ForeColor = AppTheme.Danger;
-        delete.Click += async (_, _) => await RemoveSelectedAccountAsync();
+        delete.Click += (_, _) => _ = RunUiEventAsync("删除账号", RemoveSelectedAccountAsync);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("打开日志目录", null, (_, _) => OpenLogs());
         menu.Closed += (_, _) => menu.Dispose();
@@ -603,16 +633,22 @@ public sealed class MainForm : Form
     private async Task CloseCodexAsync()
     {
         var result = await _services.Lifecycle.RequestCloseAsync(TimeSpan.FromSeconds(20), _lifetime.Token);
-        if (!result.Exited) throw new InvalidOperationException("Codex 尚未完整退出，本次切换已取消。请在任务结束后手动退出 Codex，再重试切换。");
+        if (!result.Exited)
+            throw new InvalidOperationException($"Codex 尚未完整退出，本次切换已取消。{result.FailureReason ?? "请在任务结束后手动退出 Codex，再重试切换。"}");
     }
 
     private async Task ApplyAccountAsync(Guid profileId, bool preserveTargetCredentials = false)
     {
+        var switchId = Guid.NewGuid().ToString("N");
+        WriteLog("切换阶段", $"{switchId} 验证目标账号");
         await _services.AccountSwitch.ValidateAsync(profileId, _lifetime.Token);
+        WriteLog("切换阶段", $"{switchId} 请求 Codex 正常退出");
         await CloseCodexAsync();
         try
         {
+            WriteLog("切换阶段", $"{switchId} Codex 已退出，开始写入账号");
             await _services.AccountSwitch.SwitchAsync(profileId, _lifetime.Token, preserveTargetCredentials);
+            WriteLog("切换阶段", $"{switchId} 账号写入完成");
         }
         catch (Exception error) when (error is not AccountSwitchException { Stage: AccountSwitchStage.Recovery })
         {
@@ -622,7 +658,12 @@ public sealed class MainForm : Form
             catch (Exception launchError) { WriteLog("恢复 Codex 窗口", launchError.Message); }
             throw;
         }
-        try { await _services.Lifecycle.LaunchAsync(_lifetime.Token); }
+        try
+        {
+            WriteLog("切换阶段", $"{switchId} 启动 Codex");
+            await _services.Lifecycle.LaunchAsync(_lifetime.Token);
+            WriteLog("切换阶段", $"{switchId} 切换完成");
+        }
         catch (Exception error)
         {
             throw new InvalidOperationException("账号凭据已切换，但未能确认 Codex 窗口打开。请从开始菜单打开 Codex。", error);
@@ -640,9 +681,13 @@ public sealed class MainForm : Form
     {
         try
         {
+            WriteLog("操作阶段", $"{name} 确认通过，准备锁定界面");
             SetBusy(true, $"正在{name}…");
+            WriteLog("操作阶段", $"{name} 暂停并等待后台刷新");
             _refreshCancellation?.Cancel();
             await _refreshTask;
+            _lifetime.Token.ThrowIfCancellationRequested();
+            WriteLog("操作阶段", $"{name} 开始执行");
             await action();
             if (_lifetime.IsCancellationRequested || IsDisposed) return;
             await ReloadAsync();
@@ -656,9 +701,11 @@ public sealed class MainForm : Form
     private void SetBusy(bool busy, string? status = null)
     {
         _busy = busy;
+        if (IsDisposed || Disposing) return;
         if (status is not null) _statusText.Text = status;
         UseWaitCursor = busy;
-        foreach (var button in _actionButtons) button.Enabled = !busy;
+        foreach (var button in _actionButtons)
+            if (!button.IsDisposed) button.Enabled = !busy;
     }
 
     private void ToggleStartup()
@@ -720,15 +767,25 @@ public sealed class MainForm : Form
     {
         if (IsDisposed || _lifetime.IsCancellationRequested) return;
         var safe = SecretRedactor.Redact(error.Message);
-        WriteLog(title, safe);
+        WriteLog(title, error.ToString());
+        _ = UiExceptionGuard.TryAppend(_services.Paths.LogDirectory, title, error);
         _statusText.Text = $"{title}失败";
-        MessageBox.Show(safe, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        try
+        {
+            if (_errorPresenter is not null) _errorPresenter(title, error);
+            else MessageBox.Show(this, safe, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        catch (Exception reportingError) { _ = UiExceptionGuard.TryAppend(_services.Paths.LogDirectory, "显示错误失败", reportingError); }
     }
 
     private void WriteLog(string title, string message)
     {
-        Directory.CreateDirectory(_services.Paths.LogDirectory);
-        File.AppendAllText(Path.Combine(_services.Paths.LogDirectory, "codex-switch.log"), $"{DateTimeOffset.Now:O} {title}: {SecretRedactor.Redact(message)}{Environment.NewLine}");
+        try
+        {
+            Directory.CreateDirectory(_services.Paths.LogDirectory);
+            File.AppendAllText(Path.Combine(_services.Paths.LogDirectory, "codex-switch.log"), $"{DateTimeOffset.Now:O} {title}: {SecretRedactor.Redact(message)}{Environment.NewLine}");
+        }
+        catch { /* Logging must never turn a recoverable switch error into a UI fault. */ }
     }
 
     private void AddAction(TableLayoutPanel layout, string text, Func<Task> action, int column, int row)
@@ -750,7 +807,7 @@ public sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleCenter,
             Margin = new Padding(3),
         };
-        button.Click += async (_, _) => await action();
+        button.Click += (_, _) => _ = RunUiEventAsync(text, action);
         _actionButtons.Add(button);
         return button;
     }

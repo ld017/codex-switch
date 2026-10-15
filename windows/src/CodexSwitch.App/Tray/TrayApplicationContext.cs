@@ -15,14 +15,17 @@ public sealed class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _icon;
     private readonly OperationCoordinator _operations = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 5 * 60 * 1000 };
+    private readonly SemaphoreSlim _menuGate = new(1, 1);
+    private readonly CancellationTokenSource _lifetime = new();
+    private bool _exiting;
     private IReadOnlyDictionary<Guid, UsageState> _usage = new Dictionary<Guid, UsageState>();
 
     public TrayApplicationContext(AppServices services)
     {
         _services = services;
         _icon = new NotifyIcon { Text = "Codex Switch", Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application, Visible = true, ContextMenuStrip = new ContextMenuStrip() };
-        _icon.ContextMenuStrip.Opening += async (_, _) => await RefreshMenuAsync();
-        _timer.Tick += async (_, _) => await RefreshUsageAsync(false);
+        _icon.ContextMenuStrip.Opening += (_, _) => _ = RunUiEventAsync("刷新托盘菜单", RefreshMenuAsync);
+        _timer.Tick += (_, _) => _ = RunUiEventAsync("后台刷新", () => RefreshUsageAsync(false));
         _timer.Start();
         _ = InitializeAsync();
     }
@@ -35,10 +38,17 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private async Task RefreshMenuAsync()
     {
-        var menu = _icon.ContextMenuStrip!; menu.Items.Clear();
-        var provider = ReadProvider();
-        var model = TrayMenuModel.Build(new AppSnapshot(provider, await _services.Sub2Api.IsOnlineAsync(default),
-            await _services.Accounts.GetActiveProfileIdAsync(default), await _services.Accounts.ListAsync(default), _usage, _operations.IsBusy));
+        if (_exiting) return;
+        await _menuGate.WaitAsync(_lifetime.Token);
+        try
+        {
+            var menu = _icon.ContextMenuStrip;
+            if (_exiting || menu is null || menu.IsDisposed) return;
+            var provider = ReadProvider();
+            var model = TrayMenuModel.Build(new AppSnapshot(provider, await _services.Sub2Api.IsOnlineAsync(default),
+                await _services.Accounts.GetActiveProfileIdAsync(default), await _services.Accounts.ListAsync(default), _usage, _operations.IsBusy));
+            if (_exiting || menu.IsDisposed) return;
+            menu.Items.Clear();
         menu.Items.Add(new ToolStripMenuItem("Codex Switch") { Enabled = false });
         menu.Items.Add(new ToolStripMenuItem($"当前连接：{(provider == Provider.OpenAI ? "OpenAI 官方" : "Sub2API")}") { Enabled = false });
         menu.Items.Add(new ToolStripMenuItem(model.Sub2ApiStatus) { Enabled = false });
@@ -46,13 +56,13 @@ public sealed class TrayApplicationContext : ApplicationContext
         foreach (var item in model.ProviderItems)
         {
             var ui = new ToolStripMenuItem("切换到 " + item.Text) { Checked = item.Checked, Enabled = item.Enabled, Tag = item.Provider };
-            ui.Click += async (_, _) => await SwitchProviderAsync((Provider)ui.Tag!); menu.Items.Add(ui);
+            ui.Click += (_, _) => _ = RunUiEventAsync("切换连接", () => SwitchProviderAsync(item.Provider)); menu.Items.Add(ui);
         }
         menu.Items.Add(new ToolStripSeparator()); menu.Items.Add(new ToolStripMenuItem("OpenAI 账号") { Enabled = false });
         foreach (var item in model.AccountItems)
         {
             var ui = new ToolStripMenuItem($"{item.Label}    {item.Detail}") { Checked = item.Checked, Enabled = item.Enabled, Tag = item.ProfileId };
-            ui.Click += async (_, _) => await SwitchAccountAsync((Guid)ui.Tag!); menu.Items.Add(ui);
+            ui.Click += (_, _) => _ = RunUiEventAsync("切换账号", () => SwitchAccountAsync(item.ProfileId)); menu.Items.Add(ui);
         }
         if (model.AccountItems.Count == 0) menu.Items.Add(new ToolStripMenuItem("暂无已管理账号") { Enabled = false });
         menu.Items.Add(Action("登录新账号…", () => LoginAsync(LoginMode.Browser), model.MutationsEnabled));
@@ -64,15 +74,20 @@ public sealed class TrayApplicationContext : ApplicationContext
         var startup = Action("登录时自动启动", () => { if (_services.Startup.IsEnabled) _services.Startup.Disable(); else _services.Startup.Enable(); return RefreshMenuAsync(); }, true);
         startup.Checked = _services.Startup.IsEnabled; menu.Items.Add(startup);
         menu.Items.Add(Action("打开日志目录", OpenLogsAsync, true));
-        menu.Items.Add(Action("退出", () => { ExitThread(); return Task.CompletedTask; }, !_operations.IsBusy));
+            menu.Items.Add(Action("退出", () => { ExitThread(); return Task.CompletedTask; }, !_operations.IsBusy));
+        }
+        finally { _menuGate.Release(); }
     }
 
     private ToolStripMenuItem Action(string text, Func<Task> action, bool enabled)
     {
         var item = new ToolStripMenuItem(text) { Enabled = enabled };
-        item.Click += async (_, _) => { try { await action(); } catch (Exception error) { ShowError(text, error); } };
+        item.Click += (_, _) => _ = RunUiEventAsync(text, action);
         return item;
     }
+
+    private Task RunUiEventAsync(string title, Func<Task> action)
+        => _exiting ? Task.CompletedTask : UiExceptionGuard.RunAsync(action, error => ShowError(title, error), _lifetime.Token);
 
     private Provider ReadProvider()
     {
@@ -108,7 +123,12 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         try { await _operations.TryRunAsync(async token => { await RefreshMenuAsync(); await action(token); }); }
         catch (Exception error) { ShowError("操作失败", error); }
-        finally { await RefreshMenuAsync(); }
+        finally
+        {
+            try { if (!_exiting) await RefreshMenuAsync(); }
+            catch (OperationCanceledException) when (_exiting) { }
+            catch (Exception error) { ShowError("刷新操作结果", error); }
+        }
     }
 
     private async Task LoginAsync(LoginMode mode)
@@ -149,6 +169,18 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private Task OpenLogsAsync() { Directory.CreateDirectory(_services.Paths.LogDirectory); Process.Start(new ProcessStartInfo("explorer.exe", _services.Paths.LogDirectory) { UseShellExecute = true }); return Task.CompletedTask; }
     private static bool ConfirmRestart(string title) => MessageBox.Show("Codex 将退出并重新打开，正在运行的任务会被中断。", title, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
-    private void ShowError(string title, Exception error) { var safe = SecretRedactor.Redact(error.Message); Directory.CreateDirectory(_services.Paths.LogDirectory); File.AppendAllText(Path.Combine(_services.Paths.LogDirectory, "codex-switch.log"), $"{DateTimeOffset.Now:O} {title}: {safe}{Environment.NewLine}"); MessageBox.Show(safe, title, MessageBoxButtons.OK, MessageBoxIcon.Error); }
-    protected override void ExitThreadCore() { _timer.Stop(); _timer.Dispose(); _icon.Visible = false; _icon.Dispose(); base.ExitThreadCore(); }
+    private void ShowError(string title, Exception error)
+    {
+        _ = UiExceptionGuard.TryAppend(_services.Paths.LogDirectory, title, error);
+        if (_exiting) return;
+        try { MessageBox.Show(SecretRedactor.Redact(error.Message), title, MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        catch { }
+    }
+    protected override void ExitThreadCore()
+    {
+        _exiting = true;
+        try { _lifetime.Cancel(); _timer.Stop(); _timer.Dispose(); _icon.Visible = false; _icon.Dispose(); }
+        catch (Exception error) { _ = UiExceptionGuard.TryAppend(_services.Paths.LogDirectory, "关闭托盘", error); }
+        base.ExitThreadCore();
+    }
 }

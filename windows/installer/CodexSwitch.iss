@@ -1,5 +1,5 @@
 #define AppName "Codex Switch"
-#define AppVersion "1.0.4"
+#define AppVersion "1.0.5"
 #define AppExeName "CodexSwitch.exe"
 
 [Setup]
@@ -25,7 +25,7 @@ CloseApplications=yes
 Name: "startup"; Description: "登录 Windows 时自动启动 Codex Switch"; GroupDescription: "其他选项："; Flags: unchecked
 
 [Files]
-Source: "..\..\artifacts\publish\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\artifacts\publish\CodexSwitch.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Codex Switch"; Filename: "{app}\{#AppExeName}"

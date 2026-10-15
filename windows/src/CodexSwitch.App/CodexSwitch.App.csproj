@@ -16,7 +16,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>CodexSwitch</AssemblyName>
     <RootNamespace>CodexSwitch.App</RootNamespace>
-    <Version>1.0.4</Version>
+    <Version>1.0.5</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>

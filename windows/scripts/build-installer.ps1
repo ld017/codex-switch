@@ -13,8 +13,20 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
 }
 
-& dotnet publish $project -c Release -r win-x64 --self-contained true -o $publishDirectory `
-    -p:DebugType=None -p:DebugSymbols=false
+$releaseProperties = @(
+    '-p:DebugType=None',
+    '-p:DebugSymbols=false',
+    '-p:ContinuousIntegrationBuild=true',
+    '-p:EmbedUntrackedSources=false',
+    "-p:PathMap=$repositoryRoot=/_/"
+)
+
+# Rebuild referenced assemblies as well: an incremental publish can otherwise
+# reuse DLLs from the preceding test build that still contain local PDB paths.
+& dotnet build $project -t:Rebuild -c Release -r win-x64 --self-contained true @releaseProperties
+if ($LASTEXITCODE -ne 0) { throw 'Release rebuild failed.' }
+
+& dotnet publish $project -c Release -r win-x64 --self-contained true --no-build --no-restore -o $publishDirectory @releaseProperties
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 
 $isccCandidates = @(

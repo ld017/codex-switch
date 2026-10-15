@@ -7,3 +7,25 @@ windows/**/bin/
 windows/**/obj/
 .vs/
 artifacts/
+
+# Local runtime data, credentials, logs and debugger outputs must stay private.
+**/auth.json
+**/auth-*.json
+**/cache.json
+**/config.json
+**/usage-external-auth.json
+**/accounts/
+**/auth-backups/
+**/logs/
+*.pdb
+*.log
+*.bin
+*.exe
+*.zip
+*.dmp
+*.mdmp
+*.user
+*.suo
+.env
+.env.*
+!.env.example
