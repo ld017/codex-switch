@@ -1,6 +1,9 @@
 namespace CodexSwitch.Core.Codex;
 
-public sealed record CodexShutdownResult(bool Exited, IReadOnlyCollection<int> CapturedProcessIds);
+public sealed record CodexShutdownResult(
+    bool Exited,
+    IReadOnlyCollection<int> CapturedProcessIds,
+    string? FailureReason = null);
 
 public interface ICodexLifecycle
 {
