@@ -14,55 +14,62 @@ public sealed class UsageBarControl : Control
         Height = 8;
         MinimumSize = new Size(80, 8);
         Dock = DockStyle.Fill;
-        Margin = new Padding(0, 6, 0, 6);
+        Margin = new Padding(0, 9, 0, 9);
+        SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
+        BackColor = Color.Transparent;
     }
 
     public int? Percent
     {
         get => _percent;
-        set { _percent = value; Invalidate(); }
+        set
+        {
+            if (_percent == value) return;
+            _percent = value;
+            Invalidate();
+        }
     }
 
     public UsageLevel Level
     {
         get => _level;
-        set { _level = value; Invalidate(); }
+        set
+        {
+            if (_level == value) return;
+            _level = value;
+            Invalidate();
+        }
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        var track = new Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
-        using var trackPath = RoundedRectangle(track, Height / 2f);
-        using var trackBrush = new SolidBrush(Color.FromArgb(222, 226, 232));
+        if (Width < 2 || Height < 2) return;
+        var trackHeight = Math.Min(7, Height - 1);
+        var track = new Rectangle(0, (Height - trackHeight) / 2, Width - 1, trackHeight);
+        using var trackPath = RoundedRectangle(track, trackHeight / 2f);
+        using var trackBrush = new SolidBrush(AppTheme.Track);
         e.Graphics.FillPath(trackBrush, trackPath);
-
-        using var tickPen = new Pen(Color.FromArgb(155, 163, 174), 1);
-        for (var index = 1; index < 4; index++)
-        {
-            var x = Width * index / 4f;
-            e.Graphics.DrawLine(tickPen, x, 1, x, Height - 2);
-        }
 
         if (_percent is not int percent || percent <= 0)
         {
             return;
         }
 
-        var fillWidth = Math.Max(Height, (int)Math.Round(track.Width * Math.Clamp(percent, 0, 100) / 100d));
+        var fillWidth = Math.Max(1, (int)Math.Round(track.Width * Math.Clamp(percent, 0, 100) / 100d));
         var fill = new Rectangle(track.X, track.Y, Math.Min(track.Width, fillWidth), track.Height);
-        using var fillPath = RoundedRectangle(fill, Height / 2f);
+        using var fillPath = RoundedRectangle(fill, Math.Min(fill.Width, trackHeight) / 2f);
         using var fillBrush = new SolidBrush(LevelColor(_level));
         e.Graphics.FillPath(fillBrush, fillPath);
     }
 
     private static Color LevelColor(UsageLevel level) => level switch
     {
-        UsageLevel.Critical => Color.FromArgb(218, 92, 85),
-        UsageLevel.Warning => Color.FromArgb(215, 157, 75),
-        UsageLevel.Healthy => Color.FromArgb(84, 174, 158),
-        _ => Color.FromArgb(178, 185, 194),
+        UsageLevel.Critical => AppTheme.Danger,
+        UsageLevel.Warning => AppTheme.Warning,
+        UsageLevel.Healthy => AppTheme.Success,
+        _ => AppTheme.Quiet,
     };
 
     private static GraphicsPath RoundedRectangle(Rectangle rectangle, float radius)

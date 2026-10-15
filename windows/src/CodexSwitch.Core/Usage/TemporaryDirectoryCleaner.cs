@@ -61,7 +61,7 @@ public sealed class TemporaryDirectoryCleaner : ITemporaryDirectoryCleaner
         foreach (var directory in new DirectoryInfo(root).EnumerateDirectories("usage-*", SearchOption.TopDirectoryOnly))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (directory.LastWriteTimeUtc <= cutoff)
+            if (directory.LastWriteTimeUtc <= cutoff && !File.Exists(Path.Combine(directory.FullName, "auth-recovery-required")))
             {
                 _ = await TryDeleteAsync(directory.FullName, cancellationToken);
             }

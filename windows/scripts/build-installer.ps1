@@ -13,7 +13,8 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
 }
 
-& dotnet publish $project -c Release -r win-x64 --self-contained true -o $publishDirectory
+& dotnet publish $project -c Release -r win-x64 --self-contained true -o $publishDirectory `
+    -p:DebugType=None -p:DebugSymbols=false
 if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
 
 $isccCandidates = @(

@@ -30,15 +30,27 @@ public static class TrayMenuModel
     private static string FormatUsage(UsageState? state)
     {
         if (state is null) return "额度：尚未刷新";
-        if (state.Status == UsageStatus.Refreshing) return "额度：刷新中…";
-        if (state.Status == UsageStatus.AuthenticationRequired) return "登录已失效";
+        if (state.Status == UsageStatus.Refreshing && state.Snapshot is null) return "额度：刷新中…";
+        if (state.Status == UsageStatus.AuthenticationRequired && state.Snapshot is null) return "登录已失效";
         if (state.Status == UsageStatus.Error && state.Snapshot is null) return "额度：刷新失败";
         var snapshot = state.Snapshot;
         if (snapshot is null) return "额度：不可用";
         var parts = new List<string>();
-        if (snapshot.PrimaryUsedPercent is { } primary) parts.Add($"主 {primary}%");
-        if (snapshot.SecondaryUsedPercent is { } secondary) parts.Add($"次 {secondary}%");
+        if (snapshot.PrimaryRemainingPercent is { } primary) parts.Add($"主剩余 {primary}%");
+        if (snapshot.SecondaryRemainingPercent is { } secondary) parts.Add($"次剩余 {secondary}%");
         if (snapshot.ResetCreditsAvailable is { } credits) parts.Add($"重置卡 {credits}");
+        if (snapshot.CreditsUnlimited == true) parts.Add("积分不限");
+        else if (snapshot.CreditsRemaining is { } balance) parts.Add($"积分 {balance:0.##}");
+        if (state.Status != UsageStatus.Available)
+        {
+            parts.Add($"缓存 {snapshot.FetchedAt.LocalDateTime:M/d HH:mm}");
+            parts.Add(state.Status switch
+            {
+                UsageStatus.Refreshing => "刷新中…",
+                UsageStatus.AuthenticationRequired => "登录已失效",
+                _ => "刷新失败",
+            });
+        }
         return parts.Count == 0 ? "额度：不可用" : string.Join(" · ", parts);
     }
 }

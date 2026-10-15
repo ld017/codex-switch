@@ -209,11 +209,53 @@ public sealed class AccountStore
                 }
             }
 
-            _files.WriteAtomically(GetEncryptedPath(profileId), _protector.Protect(authJson));
+            ReplaceAuthCore(configuration, profile, auth, authJson);
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    public async Task<bool> TryReplaceAuthAsync(Guid profileId, byte[] expectedAuthJson, byte[] authJson, CancellationToken cancellationToken)
+    {
+        var expected = AuthBlob.Parse(expectedAuthJson);
+        var replacement = AuthBlob.Parse(authJson);
+        if (!expected.IdentityMatches(replacement))
+            throw new AuthBlobException("Replacement credentials belong to a different account.");
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var configuration = LoadConfiguration();
+            var profile = configuration.Profiles.FirstOrDefault(candidate => candidate.Id == profileId);
+            if (profile is null) return false;
+            var current = _protector.Unprotect(_files.ReadAllBytes(GetEncryptedPath(profileId)));
+            if (!current.SequenceEqual(expectedAuthJson)) return false;
+            ReplaceAuthCore(configuration, profile, replacement, authJson);
+            return true;
+        }
+        finally { _gate.Release(); }
+    }
+
+    private void ReplaceAuthCore(AccountConfiguration configuration, AccountProfile profile, AuthBlob auth, byte[] authJson)
+    {
+        var path = GetEncryptedPath(profile.Id);
+        var originalEncrypted = _files.ReadAllBytes(path);
+        var fingerprint = auth.GetIdentity().Fingerprint();
+        _files.WriteAtomically(path, _protector.Protect(authJson));
+        if (string.Equals(profile.IdentityFingerprint, fingerprint, StringComparison.Ordinal)) return;
+        try
+        {
+            var profiles = configuration.Profiles.Select(candidate => candidate.Id == profile.Id
+                ? candidate with { IdentityFingerprint = fingerprint } : candidate).ToArray();
+            SaveConfiguration(configuration with { Profiles = profiles });
+        }
+        catch
+        {
+            // Keep metadata and encrypted credentials consistent if the second atomic write fails.
+            _files.WriteAtomically(path, originalEncrypted);
+            throw;
         }
     }
 

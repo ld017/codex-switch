@@ -82,6 +82,74 @@ public sealed class AccountStoreTests
         Assert.Null(await store.GetActiveProfileIdAsync(default));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReplaceAuth_synchronizes_fingerprint_when_token_rotation_adds_identity_claims(bool conditional)
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.Path, new PrefixProtector(), new AtomicFileStore());
+        var original = TestAuth.OAuth("old", "old-refresh", "acct-1");
+        var profile = await store.SaveAsync("Work", original, default);
+        var updated = TestAuth.OAuth("new", "new-refresh", "acct-1", TestAuth.IdToken("subject", "mail@example.com"));
+
+        if (conditional) Assert.True(await store.TryReplaceAuthAsync(profile.Id, original, updated, default));
+        else await store.ReplaceAuthAsync(profile.Id, updated, default);
+
+        Assert.Equal(updated, await store.LoadAuthAsync(profile.Id, default));
+        Assert.Equal(AuthBlob.Parse(updated).GetIdentity().Fingerprint(), (await store.ListAsync(default)).Single().IdentityFingerprint);
+    }
+
+    [Fact]
+    public async Task TryReplaceAuthAsync_does_not_overwrite_a_newer_login()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.Path, new PrefixProtector(), new AtomicFileStore());
+        var original = TestAuth.OAuth("old", "old-refresh", "acct-1");
+        var profile = await store.SaveAsync("Work", original, default);
+        var newLogin = TestAuth.OAuth("new-login", "new-refresh", "acct-1");
+        await store.ReplaceAuthAsync(profile.Id, newLogin, default);
+
+        var replaced = await store.TryReplaceAuthAsync(profile.Id, original, TestAuth.OAuth("rotated", "rotated-refresh", "acct-1"), default);
+
+        Assert.False(replaced);
+        Assert.Equal(newLogin, await store.LoadAuthAsync(profile.Id, default));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReplaceAuth_rolls_back_credentials_if_updating_fingerprint_fails(bool conditional)
+    {
+        using var directory = new TestDirectory();
+        var files = new ConfigurationFailingFileStore();
+        var store = new AccountStore(directory.Path, new PrefixProtector(), files);
+        var original = TestAuth.OAuth("old", "old-refresh", "acct-1");
+        var profile = await store.SaveAsync("Work", original, default);
+        var updated = TestAuth.OAuth("new", "new-refresh", "acct-1", TestAuth.IdToken("subject", "mail@example.com"));
+        files.FailConfigurationWrites = true;
+
+        if (conditional) await Assert.ThrowsAsync<IOException>(() => store.TryReplaceAuthAsync(profile.Id, original, updated, default));
+        else await Assert.ThrowsAsync<IOException>(() => store.ReplaceAuthAsync(profile.Id, updated, default));
+
+        Assert.Equal(original, await store.LoadAuthAsync(profile.Id, default));
+        Assert.Equal(profile.IdentityFingerprint, (await store.ListAsync(default)).Single().IdentityFingerprint);
+    }
+
+    private sealed class ConfigurationFailingFileStore : IAtomicFileStore
+    {
+        private readonly AtomicFileStore _inner = new();
+        public bool FailConfigurationWrites { get; set; }
+        public bool Exists(string path) => _inner.Exists(path);
+        public byte[] ReadAllBytes(string path) => _inner.ReadAllBytes(path);
+        public void Delete(string path) => _inner.Delete(path);
+        public void WriteAtomically(string path, byte[] contents)
+        {
+            if (FailConfigurationWrites && System.IO.Path.GetFileName(path) == "config.json") throw new IOException("Simulated configuration write failure");
+            _inner.WriteAtomically(path, contents);
+        }
+    }
+
     private sealed class PrefixProtector : ICredentialProtector
     {
         public byte[] Protect(ReadOnlySpan<byte> plaintext) => Encoding.UTF8.GetBytes("protected:" + Convert.ToBase64String(plaintext));

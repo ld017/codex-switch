@@ -2,6 +2,8 @@
 
 **macOS 最新版：[v2.3.1 下载与更新说明](https://github.com/ld017/codex-switch/releases/tag/v2.3.1)**（Apple Silicon；ad-hoc 签名，未公证）。
 
+**Windows 最新版：[1.0.4 安装包与免安装版](https://github.com/ld017/codex-switch/releases/tag/windows-v1.0.4)**（Windows 10/11 x64，自带 .NET 8 运行时）。[Windows 更新说明](docs/releases/windows-v1.0.4.md)。
+
 ![Codex Switch 菜单，账号邮箱已遮盖](docs/images/codex-switch-menu-redacted.png)
 
 截图经图像工具遮盖账号邮箱，展示 2.3.0 累计用量布局；2.3.1 另增加本月统计、日期截至提示与账号覆盖数，详见[发布说明](docs/releases/v2.3.1.md)。

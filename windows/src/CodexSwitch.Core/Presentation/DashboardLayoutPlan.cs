@@ -9,31 +9,26 @@ public sealed record DashboardLayoutPlan(
     int WindowHeight,
     int VerticalScrollExtent)
 {
-    private const int CardHeight = 176;
-    private const int Gap = 8;
+    private const int CardHeight = 238;
+    private const int Gap = 12;
     private const int HorizontalChrome = 80;
-    private const int VerticalChrome = 650;
-    private const int MinimumCardWidth = 360;
-    private const int MaximumCardWidth = 440;
+    private const int VerticalChrome = 500;
+    private const int DefaultWindowWidth = 420;
+    private const int DefaultWindowHeight = 1040;
+    private const int MaximumCardWidth = 360;
 
     public static DashboardLayoutPlan Create(int accountCount, int workingWidth, int workingHeight)
     {
         var safeCount = Math.Max(0, accountCount);
-        var usableWidth = Math.Max(MinimumCardWidth, workingWidth - HorizontalChrome);
-        var maxColumns = Math.Max(1, usableWidth / (MinimumCardWidth + Gap));
-        var maxRows = Math.Max(1, (workingHeight - VerticalChrome) / (CardHeight + Gap));
-        var columns = safeCount == 0
-            ? 1
-            : Math.Min(maxColumns, Math.Max(1, (int)Math.Ceiling(safeCount / (double)maxRows)));
-        var rows = safeCount == 0 ? 0 : (int)Math.Ceiling(safeCount / (double)columns);
-        var cardWidth = Math.Clamp(
-            (usableWidth - (Gap * Math.Max(0, columns - 1))) / columns,
-            MinimumCardWidth,
-            MaximumCardWidth);
-        var accountHeight = rows == 0 ? 90 : (rows * CardHeight) + (Math.Max(0, rows - 1) * Gap);
-        var windowWidth = Math.Min(workingWidth - 24, HorizontalChrome + (columns * cardWidth) + (Math.Max(0, columns - 1) * Gap));
-        var windowHeight = Math.Min(workingHeight - 24, VerticalChrome + accountHeight);
+        // Account count only changes the scrollable content, never the window's
+        // default dimensions or the number of columns.
+        var windowWidth = Math.Min(DefaultWindowWidth, Math.Max(1, workingWidth - 24));
+        var windowHeight = Math.Min(DefaultWindowHeight, Math.Max(1, workingHeight - 24));
+        var cardWidth = Math.Min(MaximumCardWidth, Math.Max(1, windowWidth - HorizontalChrome));
+        var contentHeight = safeCount == 0 ? 110L : (long)safeCount * (CardHeight + Gap);
+        var accountHeight = Math.Max(1, windowHeight - VerticalChrome);
+        var scrollExtent = (int)Math.Min(int.MaxValue, Math.Max(0, contentHeight - accountHeight));
 
-        return new DashboardLayoutPlan(columns, rows, cardWidth, accountHeight, windowWidth, windowHeight, 0);
+        return new DashboardLayoutPlan(1, safeCount, cardWidth, accountHeight, windowWidth, windowHeight, scrollExtent);
     }
 }

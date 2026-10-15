@@ -1,5 +1,5 @@
 #define AppName "Codex Switch"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.4"
 #define AppExeName "CodexSwitch.exe"
 
 [Setup]

@@ -94,16 +94,14 @@ public sealed class TrayApplicationContext : ApplicationContext
     private async Task SwitchAccountAsync(Guid profileId)
     {
         if (!ConfirmRestart("切换 OpenAI 账号？")) return;
-        await RunMutationAsync(async token => { if (!await CloseCodexAsync(token)) return; await _services.AccountSwitch.SwitchAsync(profileId, token); await _services.Lifecycle.LaunchAsync(token); });
+        await RunMutationAsync(async token => { await _services.AccountSwitch.ValidateAsync(profileId, token); if (!await CloseCodexAsync(token)) return; await _services.AccountSwitch.SwitchAsync(profileId, token); await _services.Lifecycle.LaunchAsync(token); });
     }
 
     private async Task<bool> CloseCodexAsync(CancellationToken token)
     {
         var result = await _services.Lifecycle.RequestCloseAsync(TimeSpan.FromSeconds(15), token);
         if (result.Exited) return true;
-        if (MessageBox.Show("Codex 未能正常退出，是否强制结束已捕获的进程？", "Codex Switch", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return false;
-        if (!await _services.Lifecycle.ForceCloseCapturedAsync(token)) throw new InvalidOperationException("无法结束 Codex 进程。");
-        return true;
+        throw new InvalidOperationException("Codex 尚未完整退出，本次切换已取消。请在任务结束后手动退出 Codex，再重试切换。");
     }
 
     private async Task RunMutationAsync(Func<CancellationToken, Task> action)
