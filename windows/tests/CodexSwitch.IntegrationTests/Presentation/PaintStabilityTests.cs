@@ -65,12 +65,15 @@ public sealed class PaintStabilityTests
             using (var paint = new PaintEventArgs(graphics, card.ClientRectangle))
             {
                 var onPaint = typeof(AccountUsageCard).GetMethod("OnPaint", BindingFlags.Instance | BindingFlags.NonPublic)!;
-                onPaint.Invoke(card, [paint]);
+                for (var pass = 0; pass < 5; pass++) onPaint.Invoke(card, [paint]);
             }
+            Assert.Equal(0, invalidations);
+
+            // DrawToBitmap can itself queue a framework invalidation on Windows
+            // Server/theme initialization. Keep it as a render smoke check;
+            // the assertion above isolates the control's own paint callbacks.
             card.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
             DrainMessages();
-
-            Assert.Equal(0, invalidations);
         });
 
     private static AccountUsagePresentation Presentation() => new(
