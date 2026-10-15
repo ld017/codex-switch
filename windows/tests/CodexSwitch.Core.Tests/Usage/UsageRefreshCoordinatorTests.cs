@@ -15,11 +15,13 @@ public sealed class UsageRefreshCoordinatorTests
         var store = CreateStore(directory);
         var profile = await store.SaveAsync("Work", TestAuth.OAuth("access", "refresh", "acct-1"), default);
         var cache = new UsageCache(directory.File("usage.json"), new AtomicFileStore());
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var quotaReceived = false;
         var fetcher = new UsageFetcher(store, directory.File("config.toml"), directory.File("tmp"), async (_, token) =>
         {
             var quotas = Response(12);
             quotaReceived = true;
+            entered.TrySetResult();
             // The quota has arrived, then the optional token endpoint stalls past the account deadline.
             try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
             catch (OperationCanceledException error)
@@ -28,9 +30,11 @@ public sealed class UsageRefreshCoordinatorTests
             }
             return quotas;
         });
-        var coordinator = new UsageRefreshCoordinator(store, fetcher, cache, accountTimeout: TimeSpan.FromMilliseconds(150));
+        var coordinator = new UsageRefreshCoordinator(store, fetcher, cache, accountTimeout: TimeSpan.FromSeconds(1));
 
-        var result = (await coordinator.RefreshAllAsync(default))[profile.Id];
+        var refresh = coordinator.RefreshAllAsync(default);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = (await refresh)[profile.Id];
 
         Assert.True(quotaReceived);
         Assert.Equal(UsageStatus.Available, result.Status);
@@ -79,8 +83,10 @@ public sealed class UsageRefreshCoordinatorTests
         var previous = UsageSnapshotMapper.Map(Response(33), originalTokenDate) with { TokenUsage = TokenUsageState.Available(tokens) };
         await cache.SaveAsync(new Dictionary<Guid, UsageState> { [profile.Id] = UsageState.Available(previous) }, default);
         var quotaDate = DateTimeOffset.UtcNow;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var fetcher = new UsageFetcher(store, directory.File("config.toml"), directory.File("tmp"), async (_, token) =>
         {
+            entered.TrySetResult();
             try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
             catch (OperationCanceledException error)
             {
@@ -88,9 +94,11 @@ public sealed class UsageRefreshCoordinatorTests
             }
             return Response(12);
         });
-        var coordinator = new UsageRefreshCoordinator(store, fetcher, cache, accountTimeout: TimeSpan.FromMilliseconds(150));
+        var coordinator = new UsageRefreshCoordinator(store, fetcher, cache, accountTimeout: TimeSpan.FromSeconds(1));
 
-        var result = (await coordinator.RefreshAllAsync(default))[profile.Id];
+        var refresh = coordinator.RefreshAllAsync(default);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = (await refresh)[profile.Id];
 
         Assert.Equal(UsageStatus.Available, result.Status);
         Assert.Equal(12, result.Snapshot!.PrimaryUsedPercent);
@@ -180,14 +188,21 @@ public sealed class UsageRefreshCoordinatorTests
         var cache = new UsageCache(directory.File("usage.json"), new AtomicFileStore());
         var previous = UsageSnapshotMapper.Map(Response(31), DateTimeOffset.UtcNow.AddMinutes(-10));
         await cache.SaveAsync(new Dictionary<Guid, UsageState> { [slow.Id] = UsageState.Available(previous) }, default);
+        var slowEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var fetcher = new UsageFetcher(store, directory.File("config.toml"), directory.File("tmp"), async (home, token) =>
         {
-            if (home.Contains(slow.Id.ToString("N"), StringComparison.Ordinal)) await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            if (home.Contains(slow.Id.ToString("N"), StringComparison.Ordinal))
+            {
+                slowEntered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            }
             return Response(12);
         });
-        var coordinator = new UsageRefreshCoordinator(store, fetcher, cache, accountTimeout: TimeSpan.FromMilliseconds(150));
+        var coordinator = new UsageRefreshCoordinator(store, fetcher, cache, accountTimeout: TimeSpan.FromSeconds(1));
 
-        var result = await coordinator.RefreshAllAsync(default);
+        var refresh = coordinator.RefreshAllAsync(default);
+        await slowEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await refresh;
 
         Assert.Equal(UsageStatus.Error, result[slow.Id].Status);
         Assert.Contains("超时", result[slow.Id].Message);
