@@ -72,7 +72,7 @@ public sealed class MainForm : Form
         _totalTokens = _tokenOverview.TotalLabel;
         _monthTokens = _tokenOverview.MonthLabel;
         _tokenCoverage = _tokenOverview.CoverageLabel;
-        Text = "Codex Switch 1.0.5";
+        Text = "Codex Switch 1.0.6";
         DoubleBuffered = true;
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96, 96);
@@ -184,7 +184,7 @@ public sealed class MainForm : Form
             if (subtitle.MaximumSize != maximum) subtitle.MaximumSize = maximum;
         };
         header.Controls.Add(titleArea, 0, 0);
-        header.Controls.Add(new Label { Text = "1.0.5", AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = MutedColor, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Segoe UI", 8f) }, 1, 0);
+        header.Controls.Add(new Label { Text = "1.0.6", AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = MutedColor, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Segoe UI", 8f) }, 1, 0);
         return header;
     }
 
@@ -555,7 +555,7 @@ public sealed class MainForm : Form
         var profile = SelectedProfile();
         if (profile is null || profile.Id == _activeProfileId) return;
         if (_provider != Provider.OpenAI) { MessageBox.Show("请先切换到 OpenAI 官方连接。", "Codex Switch"); return; }
-        if (MessageBox.Show($"切换到账号“{profile.Label}”？请先结束 Codex 中正在运行的任务。切换会正常退出并重新打开 Codex；退出超时将取消切换。", "切换账号", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
+        if (MessageBox.Show($"切换到账号“{profile.Label}”？\n\n确认后将自动关闭并重新打开 Codex。正在运行的任务会被中断；正常退出超时后将强制终止残留 Codex 进程，无需手动退出。", "切换账号", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
         await RunUiOperationAsync("切换账号", async () =>
         {
             await ApplyAccountAsync(profile.Id);
@@ -572,7 +572,7 @@ public sealed class MainForm : Form
                 MessageBox.Show($"账号“{duplicate.Label}”已存在，是否更新凭据？", "重复账号", MessageBoxButtons.YesNo) == DialogResult.Yes, _lifetime.Token);
             _selectedProfileId = profile.Id;
             if (_provider == Provider.OpenAI
-                && MessageBox.Show($"账号“{profile.Label}”登录成功。是否立即切换到该账号并重启 Codex？", "登录完成", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                && MessageBox.Show($"账号“{profile.Label}”登录成功。是否立即切换到该账号并重启 Codex？\n\n正在运行的任务会被中断；正常退出超时后将强制终止残留 Codex 进程，无需手动退出。", "登录完成", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
             {
                 await ApplyAccountAsync(profile.Id, preserveTargetCredentials: true);
             }
@@ -589,7 +589,10 @@ public sealed class MainForm : Form
             return;
         }
 
-        if (MessageBox.Show($"将重新登录账号“{profile.Label}”。如果浏览器中选择了不同账号，更新会被拒绝。继续？", "重新登录", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK)
+        var restartNotice = _provider == Provider.OpenAI && profile.Id == _activeProfileId
+            ? "\n\n这是当前账号，更新后将自动关闭并重新打开 Codex，正在运行的任务会被中断；正常退出超时后将强制终止残留 Codex 进程。"
+            : "";
+        if (MessageBox.Show($"将重新登录账号“{profile.Label}”。如果浏览器中选择了不同账号，更新会被拒绝。继续？{restartNotice}", "重新登录", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK)
         {
             return;
         }
@@ -630,8 +633,15 @@ public sealed class MainForm : Form
         ? _accounts.FirstOrDefault(account => account.Id == id)
         : null;
 
-    private async Task CloseCodexAsync()
+    private async Task CloseCodexAsync(bool forceAfterTimeout = false)
     {
+        if (forceAfterTimeout)
+        {
+            _statusText.Text = "正在关闭 Codex，必要时终止残留进程…";
+            WriteLog("切换阶段", "已确认中断任务；正常退出超时后自动终止残留 Codex 进程");
+            await CodexShutdownCoordinator.CloseAfterConfirmationAsync(_services.Lifecycle, _lifetime.Token);
+            return;
+        }
         var result = await _services.Lifecycle.RequestCloseAsync(TimeSpan.FromSeconds(20), _lifetime.Token);
         if (!result.Exited)
             throw new InvalidOperationException($"Codex 尚未完整退出，本次切换已取消。{result.FailureReason ?? "请在任务结束后手动退出 Codex，再重试切换。"}");
@@ -643,7 +653,7 @@ public sealed class MainForm : Form
         WriteLog("切换阶段", $"{switchId} 验证目标账号");
         await _services.AccountSwitch.ValidateAsync(profileId, _lifetime.Token);
         WriteLog("切换阶段", $"{switchId} 请求 Codex 正常退出");
-        await CloseCodexAsync();
+        await CloseCodexAsync(forceAfterTimeout: true);
         try
         {
             WriteLog("切换阶段", $"{switchId} Codex 已退出，开始写入账号");

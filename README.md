@@ -2,7 +2,7 @@
 
 **macOS 最新版：[v2.3.1 下载与更新说明](https://github.com/ld017/codex-switch/releases/tag/v2.3.1)**（Apple Silicon；ad-hoc 签名，未公证）。
 
-**Windows 最新版：[1.0.5 安装包与免安装版](https://github.com/ld017/codex-switch/releases/tag/windows-v1.0.5)**（Windows 10/11 x64，自带 .NET 8 运行时）。[Windows 更新说明](docs/releases/windows-v1.0.5.md)。
+**Windows 最新版：[1.0.6 安装包与免安装版](https://github.com/ld017/codex-switch/releases/tag/windows-v1.0.6)**（Windows 10/11 x64，自带 .NET 8 运行时）。[Windows 更新说明](docs/releases/windows-v1.0.6.md)。
 
 ![Codex Switch Windows 界面示例，全部为合成账号和合成数据](docs/images/codex-switch-windows-example.png)
 

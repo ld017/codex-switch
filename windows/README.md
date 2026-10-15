@@ -4,7 +4,7 @@ Windows 10/11 x64 原生桌面面板版，提供 Provider 切换、多个 OpenAI
 
 ## 安装
 
-从 [Windows 1.0.4 Release](https://github.com/ld017/codex-switch/releases/tag/windows-v1.0.4) 下载 `CodexSwitch-Setup-1.0.4-x64.exe` 并安装，或解压免安装 ZIP 后运行 `CodexSwitch.exe`。安装程序按当前用户安装到 `%LOCALAPPDATA%\Programs\Codex Switch`，创建开始菜单快捷方式，并可选登录 Windows 时自动启动。程序自带 .NET 8 运行时。Release 同时提供 `SHA256SUMS.txt` 用于核对下载文件。
+从 [Windows 1.0.6 Release](https://github.com/ld017/codex-switch/releases/tag/windows-v1.0.6) 下载 `CodexSwitch-Setup-1.0.6-x64.exe` 并安装，或解压免安装 ZIP 后运行 `CodexSwitch.exe`。安装程序按当前用户安装到 `%LOCALAPPDATA%\Programs\Codex Switch`，创建开始菜单快捷方式，并可选登录 Windows 时自动启动。程序自带 .NET 8 运行时。Release 同时提供 `SHA256SUMS.txt` 用于核对下载文件。
 
 需要先安装官方 Codex Windows 应用。程序会从 `CODEX_CLI`、`PATH` 或 `%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe` 定位 CLI。
 
@@ -18,7 +18,14 @@ Windows 10/11 x64 原生桌面面板版，提供 Provider 切换、多个 OpenAI
 - 手动刷新额度、打开 Codex、设置开机启动或查看日志。
 - 查看累计与本月 Token、账号去重合计，以及精确数量和每日记录的详情。
 
-Provider 或账号切换会重启 Codex，确认框会提前提示结束正在运行的任务。账号校验通过后，程序只请求 Codex 正常退出；未能完整退出时取消切换。Sub2API 必须已配置在 `config.toml`，且本机 `127.0.0.1:8080` 在线；Windows 版不会自动启动 Sub2API 服务。
+切换账号时只需确认一次：程序自动关闭 Codex，正常退出等待 3 秒后仍有残留进程就自动终止，确认全部退出后写入账号并重新打开 Codex。正在进行的任务会被中断，无需先手动退出。若进程身份无法核实或终止失败，保留原登录状态并显示错误。Provider 切换仍只请求正常退出，超时取消。Sub2API 必须已配置在 `config.toml`，且本机 `127.0.0.1:8080` 在线；Windows 版不会自动启动 Sub2API 服务。
+
+## 1.0.6：确认后自动切号
+
+- 主面板和托盘的账号切换均支持确认后自动退出、必要时终止残留 Codex 进程、写入账号并重新启动。
+- 登录后立即切换、重新登录当前账号也会在确认时说明任务中断和强制退出行为。
+- 关闭仅作用于核实过身份和启动时间的 Codex 桌面进程树；不按进程名称全局终止，不绕过凭据备份与失败恢复。
+- 未确认退出时不会写入新凭据；取消确认不会关闭 Codex。
 
 ## 1.0.5：切号闪退保护
 

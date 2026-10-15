@@ -69,6 +69,36 @@ public sealed class CapturedProcessSetTests
         Assert.Equal([11], captured.RemainingInstancesFrom([orphanedBackend]));
     }
 
+    [Fact]
+    public void Verified_instance_requires_known_matching_creation_times()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var candidate = new CodexProcessCandidate(10, false, now);
+        var captured = CapturedProcessSet.CaptureTree([candidate], [10]);
+
+        Assert.True(captured.MatchesKnownInstance(candidate));
+        Assert.False(captured.MatchesKnownInstance(candidate with { StartTime = now.AddSeconds(1) }));
+        Assert.False(captured.MatchesKnownInstance(candidate with { StartTime = DateTimeOffset.MaxValue }));
+        Assert.False(captured.MatchesKnownInstance(candidate with { Id = 11 }));
+        var unknown = CapturedProcessSet.CaptureTree([candidate with { StartTime = DateTimeOffset.MaxValue }], [10]);
+        Assert.False(unknown.MatchesKnownInstance(candidate));
+    }
+
+    [Fact]
+    public void Strict_descendant_capture_does_not_authorize_new_orphan_with_ambiguous_parent_instance()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var root = new CodexProcessCandidate(10, true, now);
+        var captured = CapturedProcessSet.CaptureTree([root], [10]);
+        var orphan = new CodexProcessCandidate(11, false, now.AddSeconds(1), 10);
+
+        captured.IncludeDescendants([orphan], requirePresentParent: true);
+
+        Assert.DoesNotContain(11, captured.ProcessIds);
+        captured.IncludeDescendants([root, orphan], requirePresentParent: true);
+        Assert.True(captured.MatchesKnownInstance(orphan));
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

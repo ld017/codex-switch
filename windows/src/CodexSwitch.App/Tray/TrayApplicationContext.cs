@@ -108,12 +108,17 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private async Task SwitchAccountAsync(Guid profileId)
     {
-        if (!ConfirmRestart("切换 OpenAI 账号？")) return;
-        await RunMutationAsync(async token => { await _services.AccountSwitch.ValidateAsync(profileId, token); if (!await CloseCodexAsync(token)) return; await _services.AccountSwitch.SwitchAsync(profileId, token); await _services.Lifecycle.LaunchAsync(token); });
+        if (!ConfirmRestart("切换 OpenAI 账号？", forceAfterTimeout: true)) return;
+        await RunMutationAsync(async token => { await _services.AccountSwitch.ValidateAsync(profileId, token); if (!await CloseCodexAsync(token, forceAfterTimeout: true)) return; await _services.AccountSwitch.SwitchAsync(profileId, token); await _services.Lifecycle.LaunchAsync(token); });
     }
 
-    private async Task<bool> CloseCodexAsync(CancellationToken token)
+    private async Task<bool> CloseCodexAsync(CancellationToken token, bool forceAfterTimeout = false)
     {
+        if (forceAfterTimeout)
+        {
+            await CodexShutdownCoordinator.CloseAfterConfirmationAsync(_services.Lifecycle, token);
+            return true;
+        }
         var result = await _services.Lifecycle.RequestCloseAsync(TimeSpan.FromSeconds(15), token);
         if (result.Exited) return true;
         throw new InvalidOperationException("Codex 尚未完整退出，本次切换已取消。请在任务结束后手动退出 Codex，再重试切换。");
@@ -168,7 +173,11 @@ public sealed class TrayApplicationContext : ApplicationContext
     }
 
     private Task OpenLogsAsync() { Directory.CreateDirectory(_services.Paths.LogDirectory); Process.Start(new ProcessStartInfo("explorer.exe", _services.Paths.LogDirectory) { UseShellExecute = true }); return Task.CompletedTask; }
-    private static bool ConfirmRestart(string title) => MessageBox.Show("Codex 将退出并重新打开，正在运行的任务会被中断。", title, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
+    private static bool ConfirmRestart(string title, bool forceAfterTimeout = false) => MessageBox.Show(
+        forceAfterTimeout
+            ? "确认后将自动关闭并重新打开 Codex。正在运行的任务会被中断；正常退出超时后将强制终止残留 Codex 进程，无需手动退出。"
+            : "Codex 将正常退出并重新打开；退出超时会取消切换。正在运行的任务可能被中断。",
+        title, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
     private void ShowError(string title, Exception error)
     {
         _ = UiExceptionGuard.TryAppend(_services.Paths.LogDirectory, title, error);

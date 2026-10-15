@@ -14,15 +14,29 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
 
     private readonly Func<IReadOnlyList<CodexProcessCandidate>> _snapshotReader;
     private readonly Action _activateCodex;
+    private readonly Func<CodexProcessCandidate, bool> _requestClose;
+    private readonly Func<CodexProcessCandidate, bool> _terminate;
+    private readonly CapturedProcessSet _protected;
+    private readonly TimeSpan _forceCloseTimeout;
     private CapturedProcessSet _captured = new([]);
+    private CapturedProcessSet _terminable = new([]);
+    private bool _hasShutdownCapture;
 
     // The delegates keep lifecycle tests synthetic. Production uses the real process snapshot
     // and shell activation, while tests can exercise process races without touching Codex.
     public WindowsCodexLifecycle(
         Func<IReadOnlyList<CodexProcessCandidate>>? snapshotReader = null,
-        Action? activateCodex = null)
+        Action? activateCodex = null,
+        Func<CodexProcessCandidate, bool>? requestClose = null,
+        Func<CodexProcessCandidate, bool>? terminate = null,
+        int? protectedProcessId = null,
+        TimeSpan? forceCloseTimeout = null)
     {
         _snapshotReader = snapshotReader ?? ReadSnapshot;
+        _requestClose = requestClose ?? CloseVerifiedWindow;
+        _terminate = terminate ?? TerminateVerifiedInstance;
+        _protected = new CapturedProcessSet([protectedProcessId ?? Environment.ProcessId]);
+        _forceCloseTimeout = forceCloseTimeout ?? TimeSpan.FromSeconds(5);
         _activateCodex = activateCodex ?? (() =>
         {
             using var activation = Process.Start(ActivationInfo);
@@ -32,6 +46,7 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
     public async Task<CodexShutdownResult> RequestCloseAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _hasShutdownCapture = false;
         if (!TryReadSnapshot(out var snapshot, out var snapshotFailure))
             return new CodexShutdownResult(false, [], snapshotFailure);
 
@@ -39,6 +54,9 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
         // Capture the whole desktop tree, including its auth-writing CLI backend, before closing
         // only top-level windows. A renderer exiting does not mean auth.json is safe to replace.
         _captured = CapturedProcessSet.CaptureTree(snapshot, desktop.Select(process => process.Id));
+        _terminable = new CapturedProcessSet(desktop.Select(process => process.Id));
+        _terminable.IncludeDescendants(snapshot, requirePresentParent: true);
+        _hasShutdownCapture = true;
         var roots = CapturedProcessSet.SelectRoots(desktop.Where(process => process.HasMainWindow));
         string? closeFailure = null;
         foreach (var id in roots.ProcessIds)
@@ -46,10 +64,9 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                using var process = Process.GetProcessById(id);
                 var original = desktop.FirstOrDefault(candidate => candidate.Id == id);
-                if (original is null || !IsSameProcessInstance(process, original.StartTime)) continue;
-                _ = process.CloseMainWindow();
+                if (original is null || !_requestClose(original))
+                    closeFailure ??= "无法确认 Codex 窗口对应的进程实例。";
             }
             catch (Exception error) when (IsProcessRace(error))
             {
@@ -64,9 +81,62 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
             closeFailure ?? wait.FailureReason);
     }
 
-    // Kept for older callers. Switching credentials must never forcibly kill a user's tasks.
+    // The caller obtains the user's explicit confirmation before requesting forced shutdown.
+    // Kill each verified instance separately: a tree kill could also kill this switcher when
+    // it was originally launched from a Codex terminal.
     public async Task<bool> ForceCloseCapturedAsync(CancellationToken cancellationToken)
-        => (await WaitUntilCapturedExitAsync(TimeSpan.Zero, cancellationToken)).Exited;
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_hasShutdownCapture) return false;
+
+        var elapsed = Stopwatch.StartNew();
+        var terminationRequested = new HashSet<int>();
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryReadSnapshot(out var snapshot, out _)) return false;
+            _captured.IncludeDescendants(snapshot);
+            _terminable.IncludeDescendants(snapshot, requirePresentParent: true);
+            var remaining = _captured.RemainingInstancesFrom(snapshot).ToHashSet();
+            var desktop = CapturedProcessSet.SelectDesktopProcesses(snapshot);
+            if (remaining.Count == 0 && desktop.Count == 0) return true;
+
+            // A new desktop instance or an unverified creation time is not permission to
+            // terminate an unrelated process. An orphan first seen after its parent exited
+            // also has ambiguous ancestry, so leave credentials unchanged in that case.
+            if (desktop.Any(candidate => !_captured.MatchesKnownInstance(candidate))) return false;
+            var targets = snapshot.Where(candidate => remaining.Contains(candidate.Id)).ToArray();
+            if (targets.Any(candidate => !_terminable.MatchesKnownInstance(candidate))) return false;
+            var candidate = targets.OrderBy(candidate => candidate.StartTime)
+                .FirstOrDefault(candidate => !terminationRequested.Contains(candidate.Id));
+            if (candidate is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var requested = false;
+                try
+                {
+                    requested = _terminate(candidate);
+                }
+                catch (Exception error) when (IsProcessRace(error)) { }
+                if (!requested)
+                {
+                    // A parent can exit together with its children between snapshots. A
+                    // failed action is harmless only after the original instance is gone.
+                    if (!TryReadSnapshot(out var afterAction, out _)) return false;
+                    if (afterAction.Any(current => current.Id == candidate.Id
+                        && (current.StartTime == DateTimeOffset.MaxValue || current.StartTime == candidate.StartTime))) return false;
+                }
+                terminationRequested.Add(candidate.Id);
+            }
+
+            // Always take a fresh snapshot after termination, including with a zero deadline.
+            if (elapsed.Elapsed >= _forceCloseTimeout)
+                return (await WaitUntilCapturedExitAsync(TimeSpan.Zero, cancellationToken)).Exited;
+            // Refresh between individual kills so newly spawned children are observed while
+            // their verified parent is still present. Poll only when all known kills were sent.
+            if (candidate is null) await Task.Delay(100, cancellationToken);
+        } while (true);
+    }
 
     public async Task LaunchAsync(CancellationToken cancellationToken)
     {
@@ -113,6 +183,7 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
                 return new WaitResult(false, snapshotFailure);
 
             _captured.IncludeDescendants(snapshot);
+            _terminable.IncludeDescendants(snapshot, requirePresentParent: true);
             if (_captured.RemainingInstancesFrom(snapshot).Count == 0
                 && CapturedProcessSet.SelectDesktopProcesses(snapshot).Count == 0) return new WaitResult(true);
             if (elapsed.Elapsed >= timeout) break;
@@ -128,6 +199,11 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
         try
         {
             snapshot = _snapshotReader() ?? [];
+            _protected.IncludeDescendants(snapshot);
+            var protectedInstances = _protected.RemainingInstancesFrom(snapshot).ToHashSet();
+            if (snapshot.Any(candidate => protectedInstances.Contains(candidate.Id) && !_protected.MatchesKnownInstance(candidate)))
+                throw new SnapshotRaceException("无法确认切号器自身进程的身份，已停止切换。");
+            snapshot = snapshot.Where(candidate => !protectedInstances.Contains(candidate.Id)).ToArray();
             failureReason = null;
             return true;
         }
@@ -145,14 +221,23 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
         var result = new List<CodexProcessCandidate>();
         foreach (var (id, entry) in entries)
         {
+            var possibleDesktop = string.Equals(entry.Name, "ChatGPT.exe", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(entry.Name, "Codex.exe", StringComparison.OrdinalIgnoreCase);
             Process process;
             try { process = Process.GetProcessById(id); }
-            catch (Exception error) when (IsProcessRace(error)) { continue; }
+            catch (Exception error) when (IsProcessRace(error))
+            {
+                if (error is ArgumentException) continue; // The enumerated process already exited.
+                if (possibleDesktop)
+                    throw new SnapshotRaceException("无法稳定核对 Codex 进程状态。", error);
+                // Retain inaccessible children as unknown instances rather than treating
+                // inability to inspect an auth-writing backend as evidence that it exited.
+                result.Add(new CodexProcessCandidate(id, false, DateTimeOffset.MaxValue, entry.ParentId));
+                continue;
+            }
 
             using (process)
             {
-                var possibleDesktop = string.Equals(entry.Name, "ChatGPT.exe", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(entry.Name, "Codex.exe", StringComparison.OrdinalIgnoreCase);
                 try
                 {
                     // Toolhelp supplies names without opening protected system processes.
@@ -189,6 +274,31 @@ public sealed class WindowsCodexLifecycle : ICodexLifecycle
         if (expectedStartTime == DateTimeOffset.MaxValue) return false;
         var currentStartTime = SafeStartTime(process);
         return currentStartTime != DateTimeOffset.MaxValue && currentStartTime == expectedStartTime;
+    }
+
+    private static bool CloseVerifiedWindow(CodexProcessCandidate candidate)
+    {
+        using var process = Process.GetProcessById(candidate.Id);
+        if (!IsSameProcessInstance(process, candidate.StartTime) || !HasExpectedDesktopIdentity(process, candidate)) return false;
+        _ = process.CloseMainWindow();
+        return true;
+    }
+
+    private static bool TerminateVerifiedInstance(CodexProcessCandidate candidate)
+    {
+        using var process = Process.GetProcessById(candidate.Id);
+        if (!IsSameProcessInstance(process, candidate.StartTime) || !HasExpectedDesktopIdentity(process, candidate)) return false;
+        process.Kill(entireProcessTree: false);
+        return true;
+    }
+
+    private static bool HasExpectedDesktopIdentity(Process process, CodexProcessCandidate candidate)
+    {
+        // Descendants are authorized by their captured ancestry and creation time. Desktop
+        // entry points additionally retain the package and executable identity checks.
+        if (CapturedProcessSet.SelectDesktopProcesses([candidate]).Count == 0) return true;
+        return string.Equals(GetFamilyName(process), candidate.PackageFamilyName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(process.MainModule?.FileName, candidate.ExecutablePath, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsProcessRace(Exception error)

@@ -23,6 +23,13 @@ public sealed class CapturedProcessSet
                 || started == candidate.StartTime))
             .Select(candidate => candidate.Id).ToArray();
 
+    public bool MatchesKnownInstance(CodexProcessCandidate candidate)
+        => _captured.Contains(candidate.Id)
+            && _instances.TryGetValue(candidate.Id, out var started)
+            && started != DateTimeOffset.MaxValue
+            && candidate.StartTime != DateTimeOffset.MaxValue
+            && started == candidate.StartTime;
+
     public static IReadOnlyList<CodexProcessCandidate> SelectDesktopProcesses(IEnumerable<CodexProcessCandidate> candidates)
         => candidates.Where(candidate =>
             string.Equals(candidate.PackageFamilyName, "OpenAI.Codex_2p2nqsd0c76g0", StringComparison.OrdinalIgnoreCase)
@@ -40,7 +47,7 @@ public sealed class CapturedProcessSet
 
     // Include children created while the desktop is shutting down. Creation times prevent PID reuse
     // from turning an unrelated process into a captured child.
-    public void IncludeDescendants(IEnumerable<CodexProcessCandidate> candidates)
+    public void IncludeDescendants(IEnumerable<CodexProcessCandidate> candidates, bool requirePresentParent = false)
     {
         var snapshot = candidates.ToArray();
         foreach (var candidate in snapshot.Where(candidate => _captured.Contains(candidate.Id)))
@@ -56,7 +63,11 @@ public sealed class CapturedProcessSet
             {
                 if (candidate.ParentId is not int parentId || !_captured.Contains(parentId)) continue;
                 var parent = snapshot.FirstOrDefault(item => item.Id == parentId);
+                if (requirePresentParent && parent is null) continue;
                 if (!_instances.TryGetValue(parentId, out var started)) continue;
+                if (requirePresentParent && (started == DateTimeOffset.MaxValue
+                    || parent!.StartTime == DateTimeOffset.MaxValue
+                    || candidate.StartTime == DateTimeOffset.MaxValue)) continue;
                 if (started != DateTimeOffset.MaxValue
                     && ((parent is not null && parent.StartTime != DateTimeOffset.MaxValue && parent.StartTime != started)
                         || (candidate.StartTime != DateTimeOffset.MaxValue && candidate.StartTime < started))) continue;

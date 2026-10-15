@@ -97,6 +97,121 @@ public sealed class SwitchFailureBoundaryTests
         });
 
     [Fact]
+    public void Invalid_target_does_not_close_Codex_or_change_auth()
+        => OnSta(async () =>
+        {
+            var lifecycle = new SyntheticLifecycle();
+            using var setup = new Setup(lifecycle);
+            var before = await File.ReadAllBytesAsync(setup.Paths.AuthPath);
+            using var form = new MainForm(setup.Services, false, (_, _) => { });
+            Field<System.Windows.Forms.Timer>(form, "_timer").Stop();
+
+            await Assert.ThrowsAsync<AccountSwitchException>(() => ApplyAccount(form, Guid.NewGuid()));
+
+            Assert.Empty(lifecycle.Calls);
+            Assert.Equal(before, await File.ReadAllBytesAsync(setup.Paths.AuthPath));
+        });
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Confirmed_switch_closes_then_writes_auth_then_launches(bool normalExit)
+        => OnSta(async () =>
+        {
+            var calls = new List<string>();
+            var lifecycle = new SyntheticLifecycle(calls) { NormalExit = normalExit, ForceExit = true };
+            var files = new ObservedFileStore();
+            using var setup = new Setup(lifecycle, files);
+            var targetAuth = Auth("target");
+            var target = await setup.Accounts.SaveAsync("Target", targetAuth, default);
+            var before = await File.ReadAllBytesAsync(setup.Paths.AuthPath);
+            files.AfterWrite = path => { if (path == setup.Paths.AuthPath) calls.Add("write-auth"); };
+            lifecycle.WhenClose = () => Assert.Equal(before, File.ReadAllBytes(setup.Paths.AuthPath));
+            lifecycle.WhenForce = () => Assert.Equal(before, File.ReadAllBytes(setup.Paths.AuthPath));
+            lifecycle.WhenLaunch = () => Assert.Equal(targetAuth, File.ReadAllBytes(setup.Paths.AuthPath));
+            using var form = new MainForm(setup.Services, false, (_, _) => { });
+            Field<System.Windows.Forms.Timer>(form, "_timer").Stop();
+
+            await ApplyAccount(form, target.Id);
+
+            Assert.Equal(normalExit ? ["close", "write-auth", "launch"] : ["close", "force", "write-auth", "launch"], calls);
+            Assert.Equal(TimeSpan.FromSeconds(3), lifecycle.RequestedTimeout);
+            Assert.Equal(targetAuth, await File.ReadAllBytesAsync(setup.Paths.AuthPath));
+            Assert.Equal(target.Id, await setup.Accounts.GetActiveProfileIdAsync(default));
+            Assert.False(form.IsDisposed);
+        });
+
+    [Fact]
+    public void Failed_force_close_does_not_write_auth_or_launch()
+        => OnSta(async () =>
+        {
+            var lifecycle = new SyntheticLifecycle { NormalExit = false, ForceExit = false };
+            using var setup = new Setup(lifecycle);
+            var target = await setup.Accounts.SaveAsync("Target", Auth("target"), default);
+            var before = await File.ReadAllBytesAsync(setup.Paths.AuthPath);
+            using var form = new MainForm(setup.Services, false, (_, _) => { });
+            Field<System.Windows.Forms.Timer>(form, "_timer").Stop();
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => ApplyAccount(form, target.Id));
+
+            Assert.Contains("本次未修改账号凭据", error.Message);
+            Assert.Equal(["close", "force"], lifecycle.Calls);
+            Assert.Equal(before, await File.ReadAllBytesAsync(setup.Paths.AuthPath));
+            Assert.False(Directory.Exists(setup.Paths.AccountBackupDirectory));
+            Assert.False(form.IsDisposed);
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Shutdown_exception_does_not_write_auth_or_launch(bool duringForce)
+        => OnSta(async () =>
+        {
+            var failure = new IOException("Synthetic shutdown failure");
+            var lifecycle = new SyntheticLifecycle
+            {
+                NormalExit = false,
+                CloseError = duringForce ? null : failure,
+                ForceError = duringForce ? failure : null,
+            };
+            using var setup = new Setup(lifecycle);
+            var target = await setup.Accounts.SaveAsync("Target", Auth("target"), default);
+            var before = await File.ReadAllBytesAsync(setup.Paths.AuthPath);
+            using var form = new MainForm(setup.Services, false, (_, _) => { });
+            Field<System.Windows.Forms.Timer>(form, "_timer").Stop();
+
+            var error = await Assert.ThrowsAsync<IOException>(() => ApplyAccount(form, target.Id));
+
+            Assert.Same(failure, error);
+            Assert.Equal(duringForce ? ["close", "force"] : ["close"], lifecycle.Calls);
+            Assert.Equal(before, await File.ReadAllBytesAsync(setup.Paths.AuthPath));
+            Assert.False(Directory.Exists(setup.Paths.AccountBackupDirectory));
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Cancelled_shutdown_does_not_write_auth_or_launch(bool duringForce)
+        => OnSta(async () =>
+        {
+            var lifecycle = new SyntheticLifecycle { NormalExit = false, ForceExit = true };
+            using var setup = new Setup(lifecycle);
+            var target = await setup.Accounts.SaveAsync("Target", Auth("target"), default);
+            var before = await File.ReadAllBytesAsync(setup.Paths.AuthPath);
+            using var form = new MainForm(setup.Services, false, (_, _) => { });
+            Field<System.Windows.Forms.Timer>(form, "_timer").Stop();
+            var lifetime = Field<CancellationTokenSource>(form, "_lifetime");
+            if (duringForce) lifecycle.WhenForce = lifetime.Cancel;
+            else lifecycle.WhenClose = lifetime.Cancel;
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => ApplyAccount(form, target.Id));
+
+            Assert.Equal(duringForce ? ["close", "force"] : ["close"], lifecycle.Calls);
+            Assert.Equal(before, await File.ReadAllBytesAsync(setup.Paths.AuthPath));
+            Assert.False(Directory.Exists(setup.Paths.AccountBackupDirectory));
+        });
+
+    [Fact]
     public void A_failed_log_write_cannot_escape_the_ui_error_boundary()
         => OnSta(async () =>
         {
@@ -116,6 +231,8 @@ public sealed class SwitchFailureBoundaryTests
 
     private static Task Operation(MainForm form, Func<Task> action)
         => (Task)Method("RunUiOperationAsync").Invoke(form, ["切换账号", action])!;
+    private static Task ApplyAccount(MainForm form, Guid profileId)
+        => (Task)Method("ApplyAccountAsync").Invoke(form, [profileId, false])!;
     private static MethodInfo Method(string name) => typeof(MainForm).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
     private static T Field<T>(object instance, string name) => (T)instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(instance)!;
     private static byte[] Auth(string account) => System.Text.Encoding.UTF8.GetBytes(
@@ -127,13 +244,13 @@ public sealed class SwitchFailureBoundaryTests
         public AppPaths Paths { get; }
         public AccountStore Accounts { get; }
         public AppServices Services { get; }
-        public Setup(ICodexLifecycle? lifecycle = null)
+        public Setup(ICodexLifecycle? lifecycle = null, IAtomicFileStore? files = null)
         {
             Paths = new AppPaths(new Dictionary<string, string?> { ["CODEX_HOME"] = Path.Combine(_root, "codex"), ["CODEX_SWITCH_DATA_HOME"] = Path.Combine(_root, "data") });
             Directory.CreateDirectory(Paths.CodexHome);
             File.WriteAllText(Paths.ConfigPath, "model_provider = \"openai\"\n");
             File.WriteAllBytes(Paths.AuthPath, Auth("original"));
-            var files = new AtomicFileStore();
+            files ??= new AtomicFileStore();
             Accounts = new AccountStore(Paths.DataHome, new Protector(), files);
             var accountSwitch = new AccountSwitchService(Paths.ConfigPath, Paths.AuthPath, Paths.AccountBackupDirectory, Accounts, files);
             Services = new AppServices(Paths, Accounts, null!, accountSwitch, null!, null!, lifecycle ?? new UnusedLifecycle(), null!, null!);
@@ -150,6 +267,52 @@ public sealed class SwitchFailureBoundaryTests
         public Task<CodexShutdownResult> RequestCloseAsync(TimeSpan timeout, CancellationToken token) => throw new InvalidOperationException("Lifecycle must not run in this test");
         public Task<bool> ForceCloseCapturedAsync(CancellationToken token) => throw new InvalidOperationException("Lifecycle must not run in this test");
         public Task LaunchAsync(CancellationToken token) => throw new InvalidOperationException("Lifecycle must not run in this test");
+    }
+    private sealed class SyntheticLifecycle(List<string>? calls = null) : ICodexLifecycle
+    {
+        public bool NormalExit { get; init; }
+        public bool ForceExit { get; init; }
+        public Exception? CloseError { get; init; }
+        public Exception? ForceError { get; init; }
+        public Action? WhenClose { get; set; }
+        public Action? WhenForce { get; set; }
+        public Action? WhenLaunch { get; set; }
+        public List<string> Calls { get; } = calls ?? [];
+        public TimeSpan RequestedTimeout { get; private set; }
+        public Task<CodexShutdownResult> RequestCloseAsync(TimeSpan timeout, CancellationToken token)
+        {
+            Calls.Add("close");
+            RequestedTimeout = timeout;
+            if (CloseError is not null) return Task.FromException<CodexShutdownResult>(CloseError);
+            WhenClose?.Invoke();
+            return Task.FromResult(new CodexShutdownResult(NormalExit, [42], "Synthetic task still active"));
+        }
+        public Task<bool> ForceCloseCapturedAsync(CancellationToken token)
+        {
+            Calls.Add("force");
+            if (ForceError is not null) return Task.FromException<bool>(ForceError);
+            WhenForce?.Invoke();
+            return Task.FromResult(ForceExit);
+        }
+        public Task LaunchAsync(CancellationToken token)
+        {
+            Calls.Add("launch");
+            WhenLaunch?.Invoke();
+            return Task.CompletedTask;
+        }
+    }
+    private sealed class ObservedFileStore : IAtomicFileStore
+    {
+        private readonly AtomicFileStore _inner = new();
+        public Action<string>? AfterWrite { get; set; }
+        public bool Exists(string path) => _inner.Exists(path);
+        public byte[] ReadAllBytes(string path) => _inner.ReadAllBytes(path);
+        public void Delete(string path) => _inner.Delete(path);
+        public void WriteAtomically(string path, byte[] contents)
+        {
+            _inner.WriteAtomically(path, contents);
+            AfterWrite?.Invoke(path);
+        }
     }
     private static void OnSta(Func<Task> action)
     {
