@@ -8,17 +8,29 @@ public sealed class CodexRpcClientTests
     [Fact]
     public async Task FetchUsageAsync_publishes_quota_before_optional_token_timeout_and_preserves_read_timestamp()
     {
-        await using var client = CreateClient("token-timeout", TimeSpan.FromSeconds(1));
-        await client.InitializeAsync("Test", "1.0", default);
-        var quotaReceived = new TaskCompletionSource<DateTimeOffset>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokenRequestFile = Path.Combine(Path.GetTempPath(), $"codex-switch-token-request-{Guid.NewGuid():N}.marker");
+        try
+        {
+            await using var client = CreateClient("token-timeout", TimeSpan.FromSeconds(1), tokenRequestFile);
+            await client.InitializeAsync("Test", "1.0", default);
+            DateTimeOffset? quotaDate = null;
+            var quotaBeforeTokenRequest = false;
 
-        var refresh = client.FetchUsageAsync(default, quotaReceived: (_, at) => quotaReceived.TrySetResult(at));
-        var quotaDate = await quotaReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.False(refresh.IsCompleted);
-        var response = await refresh;
+            var response = await client.FetchUsageAsync(default, quotaReceived: (_, at) =>
+            {
+                quotaDate = at;
+                quotaBeforeTokenRequest = !File.Exists(tokenRequestFile);
+            });
 
-        Assert.Equal(quotaDate, response.QuotasFetchedAt);
-        Assert.Equal(TokenUsageStatus.Error, response.TokenUsage!.Status);
+            // Check protocol order recorded synchronously in the observer, without relying
+            // on a continuation running before the optional request's deadline expires.
+            Assert.True(quotaBeforeTokenRequest);
+            Assert.True(File.Exists(tokenRequestFile));
+            Assert.NotNull(quotaDate);
+            Assert.Equal(quotaDate, response.QuotasFetchedAt);
+            Assert.Equal(TokenUsageStatus.Error, response.TokenUsage!.Status);
+        }
+        finally { File.Delete(tokenRequestFile); }
     }
 
     [Fact]
@@ -256,7 +268,8 @@ public sealed class CodexRpcClientTests
         Assert.Contains("<redacted>", error.Message, StringComparison.Ordinal);
     }
 
-    private static CodexRpcClient CreateClient(string mode, TimeSpan? timeout = null)
-        => new("dotnet", new Dictionary<string, string?> { ["FAKE_CODEX_MODE"] = mode },
+    private static CodexRpcClient CreateClient(string mode, TimeSpan? timeout = null, string? tokenRequestFile = null)
+        => new("dotnet", new Dictionary<string, string?>
+            { ["FAKE_CODEX_MODE"] = mode, ["FAKE_CODEX_TOKEN_REQUEST_FILE"] = tokenRequestFile },
             [typeof(Marker).Assembly.Location], timeout ?? TimeSpan.FromSeconds(5));
 }

@@ -75,7 +75,12 @@ public static class Program
             }
             else if (method == "account/usage/read")
             {
-                if (mode == "token-timeout") await Task.Delay(Timeout.InfiniteTimeSpan);
+                if (mode == "token-timeout")
+                {
+                    var tokenRequestFile = Environment.GetEnvironmentVariable("FAKE_CODEX_TOKEN_REQUEST_FILE");
+                    if (!string.IsNullOrEmpty(tokenRequestFile)) await File.WriteAllTextAsync(tokenRequestFile, string.Empty);
+                    await Task.Delay(Timeout.InfiniteTimeSpan);
+                }
                 if (mode == "token-unsupported")
                     Console.WriteLine(JsonSerializer.Serialize(new { id = id.GetInt32(), error = new { message = "unsupported method account/usage/read" } }));
                 else if (mode == "token-error-secret")

@@ -16,8 +16,14 @@ public sealed class UsageFetcher
     private readonly StreamingRateLimitsFetcher _fetch;
     private readonly ITemporaryDirectoryCleaner _cleaner;
     private readonly string? _liveAuthPath;
-    // Fixed stripes preserve same-account exclusion without retaining deleted account IDs.
-    private readonly SemaphoreSlim[] _accountGates = Enumerable.Range(0, 32).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+    private readonly object _accountGateLock = new();
+    private readonly Dictionary<Guid, AccountGate> _accountGates = [];
+
+    private sealed class AccountGate
+    {
+        public readonly SemaphoreSlim Semaphore = new(1, 1);
+        public int Users;
+    }
 
     public UsageFetcher(
         AccountStore accounts,
@@ -42,10 +48,32 @@ public sealed class UsageFetcher
     public async Task<UsageSnapshot> FetchAsync(Guid profileId, CancellationToken cancellationToken,
         UsageFetchOptions? options = null, Action<UsageSnapshot>? quotaReceived = null)
     {
-        var gate = _accountGates[(int)((uint)profileId.GetHashCode() % (uint)_accountGates.Length)];
-        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { return await FetchIsolatedAsync(profileId, cancellationToken, options ?? new(), quotaReceived).ConfigureAwait(false); }
-        finally { gate.Release(); }
+        AccountGate gate;
+        lock (_accountGateLock)
+        {
+            if (!_accountGates.TryGetValue(profileId, out gate!)) _accountGates.Add(profileId, gate = new());
+            gate.Users++;
+        }
+        var acquired = false;
+        try
+        {
+            await gate.Semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            acquired = true;
+            return await FetchIsolatedAsync(profileId, cancellationToken, options ?? new(), quotaReceived).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (acquired) gate.Semaphore.Release();
+            lock (_accountGateLock)
+            {
+                // Include waiters in Users so cancellation cannot retire another caller's lock.
+                if (--gate.Users == 0)
+                {
+                    _accountGates.Remove(profileId);
+                    gate.Semaphore.Dispose();
+                }
+            }
+        }
     }
 
     private async Task<UsageSnapshot> FetchIsolatedAsync(Guid profileId, CancellationToken cancellationToken,
