@@ -1,12 +1,12 @@
 # Codex Switch
 
-**macOS 最新版：[v2.3.1 下载与更新说明](https://github.com/ld017/codex-switch/releases/tag/v2.3.1)**（Apple Silicon；ad-hoc 签名，未公证）。
+**macOS 最新版：[v2.3.2 下载与更新说明](https://github.com/ld017/codex-switch/releases/tag/v2.3.2)**（Apple Silicon；ad-hoc 签名，未公证）。
 
 **Windows 最新版：[1.0.6 安装包与免安装版](https://github.com/ld017/codex-switch/releases/tag/windows-v1.0.6)**（Windows 10/11 x64，自带 .NET 8 运行时）。[Windows 更新说明](docs/releases/windows-v1.0.6.md)。
 
 ![Codex Switch Windows 界面示例，全部为合成账号和合成数据](docs/images/codex-switch-windows-example.png)
 
-上图仅使用合成账号和合成用量数据展示 Windows 布局。macOS 2.3.1 的功能说明见[发布说明](docs/releases/v2.3.1.md)。
+上图仅使用合成账号和合成用量数据展示 Windows 布局。macOS 2.3.2 修复刷新失败并优化后台资源，详见[发布说明](docs/releases/v2.3.2.md)。
 
 `Codex Switch` 是一个 macOS 菜单栏工具和 Windows 桌面面板应用，用于统一管理两类独立状态：
 
@@ -21,11 +21,15 @@
 - OpenAI 账号切换只在当前 provider 为 `OpenAI` 时执行，避免一次操作同时改写 provider 与登录态。
 - 额度刷新在临时 `CODEX_HOME` 内运行，其中的 `model_provider` 强制设为 `openai`。因此即使桌面 Codex 当前连接 Sub2API，也不会用 Sub2API 数据冒充 OpenAI 账号额度。
 - Codex 返回的是已用百分比；菜单栏图标、账号卡片数字和进度条统一换算为剩余百分比。剩余不高于 `30%` 时警告，不高于 `10%` 时显示为紧急。
-- 重置卡使用 `rateLimitResetCredits.availableCount` 作为可用数量；到期时间取所有 `available` 卡中最早的 `expiresAt`，用本机时区显示为“最近到期”。
+- 重置卡使用 `rateLimitResetCredits.availableCount` 作为可用数量；到期时间取所有 `available` 卡中最早的 `expiresAt`，用本机时区显示为“最近到期”。macOS兼容明细缺省/null，仅知道数量时不推断到期时间。
 - 累计 Token 使用官方 `account/usage/read` 返回的 `summary.lifetimeTokens`，不是从额度百分比换算。各账号卡片显示累计值，“Token 用量详情”提供精确值、读取时间和服务端返回的每日记录。统计可能延迟，缺项不视为零，也不代表普通 ChatGPT 聊天或 Sub2API 的用量。
 - Token 合计按已保存的账号身份去重，未知身份和没有累计值的账号不计入，并显示未计入数量。查询失败可保留旧值并标记缓存；Token 接口不可用不会使已取得的额度数据失效。
 - 本月按本机当前自然月匹配官方日期桶，仅汇总已返回记录，统一用“亿 Token”；每日明细用“百万 Token”，均保留两位小数。未返回本月记录的账号显示未获取，合计标注部分覆盖；小于显示精度的正数用 `<0.01`，避免误显示为零。
 - 切换 provider 或 OpenAI 账号都会重启 Codex，菜单会在操作前明确警告当前任务将中断。
+
+## macOS 刷新与资源
+
+额度到达后立即展示，查询CLI单并发并优先当前账号；完整Token统计15分钟内复用，手动刷新可重新获取。共享历史代理采用线性分行和分段对象释放。[总体架构](docs/architecture/refresh-and-resources.md) · [验收与基准](docs/performance/2026-10-18/verification.md)。
 
 ## 账号数据
 

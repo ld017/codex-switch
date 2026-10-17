@@ -245,6 +245,7 @@ struct UsageHeaderView: View {
     let trackedProfiles: Int
     var tokenSummary: String = "Token 合计：未获取"
     var tokenCoverage: String = ""
+    var refreshProgress: String? = nil
 
     static let baseHeight: CGFloat = 73
     static let failureHeight: CGFloat = 88
@@ -286,7 +287,7 @@ struct UsageHeaderView: View {
     }
 
     private var statusLabel: String {
-        if self.isRefreshing { return "正在刷新…" }
+        if self.isRefreshing { return self.refreshProgress ?? "正在刷新…" }
         guard let updatedAt else { return "暂无额度数据" }
         return updatedLabel(from: updatedAt)
     }

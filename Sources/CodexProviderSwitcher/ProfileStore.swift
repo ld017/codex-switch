@@ -302,6 +302,8 @@ final class ProfileStore: ObservableObject {
         let liveAuthURL: URL
     }
 
+    var usageCachePaths: AppPaths { self.paths }
+
     func usageAuthSource() -> UsageAuthSource {
         UsageAuthSource(vault: self.authVault, liveAuthURL: self.codexAuthPath)
     }

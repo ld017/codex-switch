@@ -1,5 +1,6 @@
 import AppKit
 import CodexProviderCore
+import CodexProfileCore
 import Darwin
 import Foundation
 
@@ -93,10 +94,6 @@ final class CodexSystem {
         )
     }
 
-    private let codexBinary = URL(
-        fileURLWithPath:
-            "/Applications/ChatGPT.app/Contents/Resources/codex"
-    )
     private let chatGPTApplication = URL(
         fileURLWithPath: "/Applications/ChatGPT.app",
         isDirectory: true
@@ -200,7 +197,7 @@ final class CodexSystem {
                 )
                 try atomicallyWriteConfiguration(updated)
                 let doctor = try ProcessRunner.run(
-                    executable: codexBinary,
+                    executable: URL(fileURLWithPath: try CodexDesktopLifecycle().resolveBundledCLI()),
                     arguments: ["doctor", "--json"],
                     captureOutput: true
                 )

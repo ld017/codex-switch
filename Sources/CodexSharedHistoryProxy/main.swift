@@ -1,9 +1,8 @@
 import CodexProviderCore
+import CodexProfileCore
 import Darwin
 import Foundation
 
-private let defaultCLIPath =
-    "/Applications/ChatGPT.app/Contents/Resources/codex"
 private let failureMessage = Data("Codex proxy failed.\n".utf8)
 private let chunkSize = 64 * 1024
 private let escalationDelay: useconds_t = 500_000
@@ -231,13 +230,6 @@ private func makeSignalSet() -> sigset_t {
     return signalSet
 }
 
-private func rewritten(_ line: Data) -> Data {
-    guard let text = String(data: line, encoding: .utf8) else {
-        return line
-    }
-    return Data(AppServerRequestRewriter.rewrite(line: text).utf8)
-}
-
 private func readChunk(from descriptor: Int32) throws -> Data? {
     var bytes = [UInt8](repeating: 0, count: chunkSize)
     while true {
@@ -285,8 +277,17 @@ private func pumpOutput(
 ) {
     var failed = false
     do {
-        while let data = try readChunk(from: source) {
-            try writeAll(data, to: destination)
+        while true {
+            let hasData = try autoreleasepool {
+                guard let data = try readChunk(from: source) else {
+                    return false
+                }
+                try writeAll(data, to: destination)
+                return true
+            }
+            if !hasData {
+                break
+            }
         }
     } catch {
         failed = true
@@ -307,16 +308,30 @@ private func pumpInput(
     var failure: ProxyIOError?
     do {
         var lineBuffer = AppServerLineBuffer()
-        while let data = try readChunk(from: STDIN_FILENO) {
-            for line in lineBuffer.append(data) {
-                var output = rewritten(line)
-                output.append(0x0A)
-                try writeAll(output, to: childInput)
+        while true {
+            let hasData = try autoreleasepool {
+                guard let data = try readChunk(from: STDIN_FILENO) else {
+                    return false
+                }
+                for line in lineBuffer.append(data) {
+                    var output = AppServerRequestRewriter.rewrite(line: line)
+                    output.append(0x0A)
+                    try writeAll(output, to: childInput)
+                }
+                return true
+            }
+            if !hasData {
+                break
             }
         }
 
-        if let partialLine = lineBuffer.finish() {
-            try writeAll(rewritten(partialLine), to: childInput)
+        try autoreleasepool {
+            if let partialLine = lineBuffer.finish() {
+                try writeAll(
+                    AppServerRequestRewriter.rewrite(line: partialLine),
+                    to: childInput
+                )
+            }
         }
     } catch let error as ProxyIOError {
         failure = error
@@ -587,7 +602,10 @@ private func runAppServer(realCLIPath: String) -> Never {
 
 private let realCLIPath: String = {
     guard let override = getenv("CODEX_PROVIDER_REAL_CLI") else {
-        return defaultCLIPath
+        guard let path = try? CodexDesktopLifecycle().resolveBundledCLI() else {
+            exitWithFailure()
+        }
+        return path
     }
     return String(cString: override)
 }()

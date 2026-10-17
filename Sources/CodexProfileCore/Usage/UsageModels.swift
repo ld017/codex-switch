@@ -14,6 +14,8 @@ public struct UsageSnapshot: Codable, Equatable {
     public let nextResetCreditExpiresAt: Date?
     public var tokenActivity: TokenActivity?
     public var tokenActivityUnavailable: Bool?
+    /// Short redacted endpoint failure, absent in caches written by older builds.
+    public var tokenActivityError: String?
 
     public init(
         planType: String?,

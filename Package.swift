@@ -41,7 +41,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "CodexSharedHistoryProxy",
-            dependencies: ["CodexProviderCore"],
+            dependencies: ["CodexProviderCore", "CodexProfileCore"],
             swiftSettings: [
                 .define(
                     "PROXY_TESTING",

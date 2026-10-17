@@ -6,9 +6,18 @@ import CryptoKit
 
 @MainActor
 final class UsageProvider {
+    typealias Fetch = @Sendable (String, Data, URL, Bool,
+        @escaping @Sendable (UsageSnapshot) async -> Void) async throws -> UsageSnapshot
+
     private let store: ProfileStore
+    private let paths: AppPaths
+    private let fetch: Fetch
+    private var pendingForceRefresh = false
+    private(set) var completedProfiles = 0
+    private(set) var totalProfiles = 0
     private var refreshTask: Task<Void, Never>?
     private var refreshGeneration: UUID?
+    private var pendingCancelledRefresh: Task<Void, Never>?
     private var lastRefreshAll: Date = .distantPast
     private(set) var isRefreshing = false
     /// Leases currently held by this refresh cycle, keyed by profile ID, so
@@ -24,15 +33,29 @@ final class UsageProvider {
     /// is gone and lose its own claim for the lease's full lifetime. Awaited
     /// before any claim, which makes the ordering deterministic.
     private var pendingLeaseRelease: Task<Void, Never>?
-    var onRefreshComplete: (() -> Void)?
+    var onChange: (() -> Void)?
 
-    init(store: ProfileStore) {
+    init(store: ProfileStore, fetch: @escaping Fetch = { id, auth, config, includeTokens, onQuota in
+        try await CLIUsageFetcher.fetch(profileId: id, authData: auth, codexConfigURL: config,
+            clientVersion: AppInfo.version, includeTokenActivity: includeTokens, onQuota: onQuota)
+    }) {
         self.store = store
+        self.paths = store.usageCachePaths
+        self.fetch = fetch
     }
 
     func cancelRefreshes() {
         let cancelledActiveRefresh = self.refreshGeneration != nil
-        self.refreshTask?.cancel()
+        self.pendingForceRefresh = false
+        let cancelledTask = self.refreshTask
+        cancelledTask?.cancel()
+        if let cancelledTask {
+            let previous = self.pendingCancelledRefresh
+            self.pendingCancelledRefresh = Task {
+                await previous?.value
+                await cancelledTask.value
+            }
+        }
         self.refreshTask = nil
         self.refreshGeneration = nil
         self.isRefreshing = false
@@ -45,10 +68,11 @@ final class UsageProvider {
         self.activeLeases.removeAll()
         if !leasesToRelease.isEmpty {
             let previous = self.pendingLeaseRelease
+            let paths = self.paths
             self.pendingLeaseRelease = Task {
                 await previous?.value
                 for (profileID, token) in leasesToRelease {
-                    await Self.removeLease(profileIDs: [profileID], expectedToken: token)
+                    await Self.removeLease(profileIDs: [profileID], expectedToken: token, paths: paths)
                 }
             }
         }
@@ -58,7 +82,10 @@ final class UsageProvider {
     }
 
     func refreshAll(force: Bool = false) {
-        guard !self.isRefreshing else { return }
+        if self.isRefreshing {
+            self.pendingForceRefresh = self.pendingForceRefresh || force
+            return
+        }
         guard force || Date().timeIntervalSince(self.lastRefreshAll) > 60 else { return }
 
         // The nightly renewal LaunchAgent writes rejections to the shared cache
@@ -80,6 +107,9 @@ final class UsageProvider {
         self.isRefreshing = true
         let generation = UUID()
         self.refreshGeneration = generation
+        self.completedProfiles = 0
+        self.totalProfiles = self.store.config.profiles.count
+        self.onChange?()
 
         let profiles = self.store.config.profiles
         let liveId = self.store.liveProfileId ?? ""
@@ -88,33 +118,61 @@ final class UsageProvider {
         }
         let source = self.store.usageAuthSource()
 
+        let pendingCancellation = self.pendingCancelledRefresh
         self.refreshTask = Task { @MainActor in
+            // Cancellation can need time to shut down its CLI. A new cycle
+            // must not overlap that teardown, even if its generation is newer.
+            await pendingCancellation?.value
+            guard !Task.isCancelled, self.refreshGeneration == generation else { return }
+            self.pendingCancelledRefresh = nil
+            // One short-lived CLI at a time limits peak memory. Publish each quota
+            // immediately, so a slow token endpoint or another account cannot hide it.
             let groups = await Self.groupContexts(contexts, source: source)
-            await withTaskGroup(of: Void.self) { group in
-                var pending = groups[...]
-                let initialBatch = min(3, pending.count)
-                for _ in 0 ..< initialBatch {
-                    let fetchGroup = pending.removeFirst()
-                    group.addTask { @MainActor in
-                        await self.refreshGroup(fetchGroup, generation: generation, source: source)
-                    }
-                }
-                for await _ in group {
-                    if let fetchGroup = pending.popFirst() {
-                        group.addTask { @MainActor in
-                            await self.refreshGroup(fetchGroup, generation: generation, source: source)
-                        }
-                    }
-                }
+            for fetchGroup in groups {
+                guard !Task.isCancelled, self.refreshGeneration == generation else { break }
+                await self.refreshGroup(fetchGroup, generation: generation, source: source, force: force)
+                guard !Task.isCancelled, self.refreshGeneration == generation else { break }
+                self.completedProfiles += fetchGroup.contexts.count
+                self.onChange?()
             }
             if self.refreshGeneration == generation {
                 self.isRefreshing = false
                 self.refreshTask = nil
                 self.refreshGeneration = nil
                 self.store.flushCacheIfDirty()
-                self.onRefreshComplete?()
+                self.onChange?()
+                if self.pendingForceRefresh {
+                    self.pendingForceRefresh = false
+                    self.refreshAll(force: true)
+                }
             }
         }
+    }
+
+    static func needsTokenRefresh(cached: UsageSnapshot?, force: Bool, now: Date = Date()) -> Bool {
+        guard !force, let cached, cached.tokenActivityUnavailable != true,
+              let activity = cached.tokenActivity,
+              activity.lifetimeTokens != nil, activity.dailyUsageBuckets != nil else { return true }
+        let age = now.timeIntervalSince(activity.fetchedAt)
+        return age < 0 || age >= 900
+    }
+
+    static func mergingTokenActivity(_ snapshot: UsageSnapshot, cached: UsageSnapshot?) -> UsageSnapshot {
+        var result = snapshot
+        guard let old = cached?.tokenActivity else { return result }
+        guard let fresh = snapshot.tokenActivity else {
+            result.tokenActivity = old
+            result.tokenActivityUnavailable = true
+            return result
+        }
+        let usesCached = (fresh.lifetimeTokens == nil && old.lifetimeTokens != nil)
+            || (fresh.dailyUsageBuckets == nil && old.dailyUsageBuckets != nil)
+        result.tokenActivity = TokenActivity(
+            lifetimeTokens: fresh.lifetimeTokens ?? old.lifetimeTokens,
+            dailyUsageBuckets: fresh.dailyUsageBuckets ?? old.dailyUsageBuckets,
+            fetchedAt: usesCached ? min(fresh.fetchedAt, old.fetchedAt) : fresh.fetchedAt)
+        if usesCached { result.tokenActivityUnavailable = true }
+        return result
     }
 
     private struct RefreshContext {
@@ -162,7 +220,12 @@ final class UsageProvider {
                 groups[key] = RefreshGroup(contexts: [context], authData: authData, loadError: loadError)
             }
         }
-        return Array(groups.values)
+        return groups.values.sorted {
+            let leftLive = $0.contexts.contains(where: \.isLive)
+            let rightLive = $1.contexts.contains(where: \.isLive)
+            if leftLive != rightLive { return leftLive }
+            return ($0.contexts.first?.id ?? "") < ($1.contexts.first?.id ?? "")
+        }
     }
 
     /// Mirrors the CLI's `renewalCredentialFingerprint`: SHA-256 of the refresh
@@ -179,7 +242,7 @@ final class UsageProvider {
     }
 
     private func refreshGroup(
-        _ fetchGroup: RefreshGroup, generation: UUID, source: ProfileStore.UsageAuthSource
+        _ fetchGroup: RefreshGroup, generation: UUID, source: ProfileStore.UsageAuthSource, force: Bool
     ) async {
         guard !self.store.isAuthMutationInProgress() else { return }
         var diagnostics = Dictionary(uniqueKeysWithValues: fetchGroup.contexts.map {
@@ -189,39 +252,9 @@ final class UsageProvider {
         func finalize(
             _ context: RefreshContext, _ status: ProfileStatus, decision: String
         ) async {
-            // Bail if the refresh was cancelled (e.g. by cancelRefreshes() during
-            // a profile switch). Prevents in-flight stale writes from landing.
-            guard !Task.isCancelled, self.refreshGeneration == generation else { return }
-
-            self.store.clearRenewalStateIfCredentialMoved(
-                for: context.id, currentCredentialFingerprint: context.credentialFingerprint)
-
-            // Re-derive liveness at finalize time. The snapshot was fetched under
-            // whichever credentials were live at refresh START; if the live
-            // profile changed mid-flight, this snapshot was read against the wrong
-            // auth.json and must not be written under `id`. The post-switch forced
-            // refreshAll will supply correct data, so we drop the result here.
-            let currentlyLive = context.id == (self.store.liveProfileId ?? "")
-            if context.isLive != currentlyLive { return }
-
             diagnostics[context.id]?.lastDecision = decision
-            // Re-check whether auth was torn down while we fetched. Live profiles
-            // use a cheap main-safe file stat; non-live profiles re-query the
-            // vault, but off the main actor so a Keychain consent prompt cannot
-            // block the menu bar.
-            let stillAvailable = currentlyLive
-                ? self.store.liveAuthExists()
-                : await Self.loadAuthAvailability(source: source, profileID: context.id)
-            guard !Task.isCancelled, self.refreshGeneration == generation else { return }
-            if !stillAvailable {
-                let overrideDecision = context.cached != nil ? "relogin-needed" : "not-set-up"
-                diagnostics[context.id]?.lastDecision = overrideDecision
-                self.store.updateRefreshDiagnostics(context.id, diagnostics[context.id]!)
-                self.store.updateStatus(context.id, context.cached.map { .reloginNeeded($0) } ?? .notSetUp)
-                return
-            }
-            self.store.updateRefreshDiagnostics(context.id, diagnostics[context.id]!)
-            self.store.updateStatus(context.id, status)
+            await self.publish(context, status: status, diagnostics: diagnostics[context.id]!,
+                generation: generation, source: source)
         }
 
         guard let authData = fetchGroup.authData else {
@@ -253,11 +286,18 @@ final class UsageProvider {
             expiresAt: Date().addingTimeInterval(60),
             createdAt: Date())
         await self.pendingLeaseRelease?.value
+        guard !Task.isCancelled, self.refreshGeneration == generation else { return }
         guard await Self.claimLease(
-            profileIDs: fetchGroup.contexts.map(\.id), reservation: reservation) else {
+            profileIDs: fetchGroup.contexts.map(\.id), reservation: reservation, paths: self.paths) else {
             for context in fetchGroup.contexts {
+                diagnostics[context.id]?.lastError = "账号被其他任务保留，或缓存暂不可用"
                 await finalize(context, .stale(context.cached), decision: "reserved")
             }
+            return
+        }
+        guard !Task.isCancelled, self.refreshGeneration == generation else {
+            await Self.removeLease(profileIDs: fetchGroup.contexts.map(\.id),
+                expectedToken: reservation.token, paths: self.paths)
             return
         }
         for context in fetchGroup.contexts {
@@ -271,15 +311,24 @@ final class UsageProvider {
         // `do`/`catch` below.
 
         do {
-            let snapshot = try await CLIUsageFetcher.fetch(
-                profileId: fetchGroup.contexts[0].id, authData: authData, codexConfigURL: self.store.codexConfigURL(),
-                clientVersion: AppInfo.version)
+            let includeTokens = fetchGroup.contexts.contains {
+                Self.needsTokenRefresh(cached: $0.cached, force: force)
+            }
+            let snapshot = try await self.fetch(fetchGroup.contexts[0].id, authData,
+                self.store.codexConfigURL(), includeTokens, { quota in
+                    for context in fetchGroup.contexts {
+                        let cachedQuota = await Self.mergingTokenActivity(quota, cached: context.cached)
+                        await self.publish(context, status: .available(cachedQuota),
+                            diagnostics: ProfileRefreshDiagnostics(lastAttemptAt: Date(), lastDecision: "quota-ready"),
+                            generation: generation, source: source)
+                    }
+                })
             for context in fetchGroup.contexts {
                 diagnostics[context.id]?.lastError = nil
-                var merged = snapshot
-                if snapshot.tokenActivityUnavailable == true, snapshot.tokenActivity?.lifetimeTokens == nil,
-                   let cached = context.cached?.tokenActivity {
-                    merged.tokenActivity = cached
+                var merged = Self.mergingTokenActivity(snapshot, cached: context.cached)
+                if !includeTokens {
+                    merged.tokenActivityUnavailable = context.cached?.tokenActivityUnavailable
+                    merged.tokenActivityError = context.cached?.tokenActivityError
                 }
                 await finalize(context, .available(merged), decision: "available")
                 AppLogger.info("Usage refresh succeeded", metadata: ["profile": context.id])
@@ -316,12 +365,52 @@ final class UsageProvider {
         await self.releaseLease(fetchGroup.contexts.map(\.id), expectedToken: reservation.token)
     }
 
+    private func publish(_ context: RefreshContext, status: ProfileStatus,
+        diagnostics: ProfileRefreshDiagnostics, generation: UUID, source: ProfileStore.UsageAuthSource
+    ) async {
+        // Bail if the refresh was cancelled (e.g. by cancelRefreshes() during
+        // a profile switch). Prevents in-flight stale writes from landing.
+        guard !Task.isCancelled, self.refreshGeneration == generation else { return }
+
+        self.store.clearRenewalStateIfCredentialMoved(
+            for: context.id, currentCredentialFingerprint: context.credentialFingerprint)
+
+        // Re-derive liveness at finalize time. The snapshot was fetched under
+        // whichever credentials were live at refresh START; if the live
+        // profile changed mid-flight, this snapshot was read against the wrong
+        // auth.json and must not be written under `id`. The post-switch forced
+        // refreshAll will supply correct data, so we drop the result here.
+        let currentlyLive = context.id == (self.store.liveProfileId ?? "")
+        if context.isLive != currentlyLive { return }
+
+        // Re-check whether auth was torn down while we fetched. Live profiles
+        // use a cheap main-safe file stat; non-live profiles re-query the
+        // vault, but off the main actor so a Keychain consent prompt cannot
+        // block the menu bar.
+        let stillAvailable = currentlyLive
+            ? self.store.liveAuthExists()
+            : await Self.loadAuthAvailability(source: source, profileID: context.id)
+        guard !Task.isCancelled, self.refreshGeneration == generation else { return }
+        if !stillAvailable {
+            let overrideDecision = context.cached != nil ? "relogin-needed" : "not-set-up"
+            var missingDiagnostics = diagnostics
+            missingDiagnostics.lastDecision = overrideDecision
+            self.store.updateRefreshDiagnostics(context.id, missingDiagnostics)
+            self.store.updateStatus(context.id, context.cached.map { .reloginNeeded($0) } ?? .notSetUp)
+            self.onChange?()
+            return
+        }
+        self.store.updateRefreshDiagnostics(context.id, diagnostics)
+        self.store.updateStatus(context.id, status)
+        self.onChange?()
+    }
+
     /// Releases a lease claimed by `refreshGroup` and clears it from
     /// `activeLeases`. Called explicitly at every exit point of
     /// `refreshGroup` after the lease is claimed, since `removeLease` is
     /// `async` and `defer` bodies cannot contain `await`.
     private func releaseLease(_ profileIDs: [String], expectedToken: String) async {
-        await Self.removeLease(profileIDs: profileIDs, expectedToken: expectedToken)
+        await Self.removeLease(profileIDs: profileIDs, expectedToken: expectedToken, paths: self.paths)
         for id in profileIDs where self.activeLeases[id] == expectedToken {
             self.activeLeases.removeValue(forKey: id)
         }
@@ -333,9 +422,8 @@ final class UsageProvider {
     private struct CacheDecodeFailed: Error {}
 
     private nonisolated static func claimLease(
-        profileIDs: [String], reservation: LeaseReservation
+        profileIDs: [String], reservation: LeaseReservation, paths: AppPaths
     ) async -> Bool {
-        let paths = AppPaths()
         do {
             try CacheLock.withLock(at: paths.cacheLockURL) {
                 var cache: UsageCache
@@ -371,9 +459,8 @@ final class UsageProvider {
     }
 
     private nonisolated static func removeLease(
-        profileIDs: [String], expectedToken: String
+        profileIDs: [String], expectedToken: String, paths: AppPaths
     ) async {
-        let paths = AppPaths()
         try? CacheLock.withLock(at: paths.cacheLockURL) {
             var cache: UsageCache
             switch Self.loadCache(paths: paths) {

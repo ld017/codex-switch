@@ -1,0 +1,58 @@
+{
+  "results": [
+    {
+      "trial": 1,
+      "variant": "before",
+      "seconds": 2.73,
+      "maximum_rss_bytes": 100745216,
+      "peak_footprint_bytes": 115540544
+    },
+    {
+      "trial": 1,
+      "variant": "after",
+      "seconds": 0.47,
+      "maximum_rss_bytes": 12566528,
+      "peak_footprint_bytes": 8094152
+    },
+    {
+      "trial": 2,
+      "variant": "before",
+      "seconds": 2.84,
+      "maximum_rss_bytes": 121978880,
+      "peak_footprint_bytes": 117523008
+    },
+    {
+      "trial": 2,
+      "variant": "after",
+      "seconds": 0.59,
+      "maximum_rss_bytes": 12746752,
+      "peak_footprint_bytes": 8274376
+    },
+    {
+      "trial": 3,
+      "variant": "before",
+      "seconds": 3.45,
+      "maximum_rss_bytes": 85098496,
+      "peak_footprint_bytes": 117686848
+    },
+    {
+      "trial": 3,
+      "variant": "after",
+      "seconds": 0.5,
+      "maximum_rss_bytes": 11632640,
+      "peak_footprint_bytes": 7160264
+    }
+  ],
+  "medians": {
+    "before": {
+      "seconds": 2.84,
+      "maximum_rss_bytes": 100745216,
+      "peak_footprint_bytes": 117523008
+    },
+    "after": {
+      "seconds": 0.5,
+      "maximum_rss_bytes": 12566528,
+      "peak_footprint_bytes": 8094152
+    }
+  }
+}

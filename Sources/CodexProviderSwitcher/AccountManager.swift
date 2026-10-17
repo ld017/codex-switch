@@ -4,7 +4,7 @@ import CodexProviderCore
 import SwiftUI
 
 @MainActor
-final class AccountManager: NSObject {
+final class AccountManager: NSObject, NSMenuDelegate {
     private let store: ProfileStore
     private let usageProvider: UsageProvider
     private let currentProvider: () throws -> Provider
@@ -17,6 +17,11 @@ final class AccountManager: NSObject {
 
     private weak var menu: NSMenu?
     private var refreshTimer: Timer?
+    private var isMenuOpen = false
+    private var headerHost: NSHostingView<UsageHeaderView>?
+    private var profileHosts: [String: NSHostingView<ProfileCardView>] = [:]
+    private weak var refreshMenuItem: NSMenuItem?
+    private weak var tokenDetailsMenu: NSMenu?
     private var lastLiveAuthMtime: Date?
     private var liveAuthWarning: LiveAuthWarning?
 
@@ -57,19 +62,22 @@ final class AccountManager: NSObject {
             }
         }
         self.syncActiveProfile(force: true)
-        self.usageProvider.onRefreshComplete = { [weak self] in
+        self.usageProvider.onChange = { [weak self] in
             guard let self else { return }
             self.updateIcon()
-            self.onChange()
+            self.refreshVisibleItems()
         }
         self.requestRefresh(force: true)
-        self.refreshTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) {
+        let timer = Timer(timeInterval: 300, repeats: true) {
             [weak self] _ in
             Task { @MainActor in
                 self?.syncActiveProfile(force: true)
-                self?.requestRefresh(force: true)
+                self?.requestRefresh()
             }
         }
+        timer.tolerance = 30
+        RunLoop.main.add(timer, forMode: .common)
+        self.refreshTimer = timer
     }
 
     func stop() {
@@ -79,12 +87,25 @@ final class AccountManager: NSObject {
     }
 
     func menuWillOpen() {
+        self.isMenuOpen = true
         self.syncActiveProfile()
         self.requestRefresh()
     }
 
+    func menuDidClose() {
+        self.isMenuOpen = false
+    }
+
+    // Token detail rows are created only when that submenu is opened.
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === self.tokenDetailsMenu else { return }
+        self.populateTokenDetails(menu)
+    }
+
     func appendItems(to menu: NSMenu) {
         self.menu = menu
+        self.headerHost = nil
+        self.profileHosts.removeAll()
 
         if let warning = self.liveAuthWarning {
             let item = NSMenuItem(title: self.warningTitle(warning), action: nil, keyEquivalent: "")
@@ -120,7 +141,8 @@ final class AccountManager: NSObject {
             keyEquivalent: "r")
         refresh.keyEquivalentModifierMask = [.command]
         refresh.target = self
-        refresh.isEnabled = !self.usageProvider.isRefreshing
+        refresh.isEnabled = true
+        self.refreshMenuItem = refresh
         refresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
         menu.addItem(refresh)
 
@@ -160,7 +182,7 @@ final class AccountManager: NSObject {
         return active + ProfileHealth.menuOrderedInactive(records)
     }
 
-    private func addUsageHeader(to menu: NSMenu) {
+    private func usageHeader() -> UsageHeaderView {
         let updatedAt = self.store.statuses.values.compactMap { $0.snapshot?.fetchedAt }.max()
         let tracked = self.store.config.profiles.filter {
             if case .notSetUp = self.store.statuses[$0.id] ?? .notSetUp { return false }
@@ -179,8 +201,15 @@ final class AccountManager: NSObject {
             failingProfiles: failing.count,
             trackedProfiles: tracked.count,
             tokenSummary: tokenSummary.values,
-            tokenCoverage: tokenSummary.coverage)
+            tokenCoverage: tokenSummary.coverage,
+            refreshProgress: "正在刷新：\(self.usageProvider.completedProfiles)/\(self.usageProvider.totalProfiles) 个账号")
+        return header
+    }
+
+    private func addUsageHeader(to menu: NSMenu) {
+        let header = self.usageHeader()
         let host = NSHostingView(rootView: header)
+        self.headerHost = host
         host.frame = NSRect(
             x: 0,
             y: 0,
@@ -200,6 +229,7 @@ final class AccountManager: NSObject {
             duplicateLine: duplicateLine,
             onSwitch: { [weak self] in self?.selectProfile(health.profile.id) })
         let host = NSHostingView(rootView: card)
+        self.profileHosts[health.profile.id] = host
         host.frame = NSRect(
             x: 0,
             y: 0,
@@ -239,6 +269,15 @@ final class AccountManager: NSObject {
     private func addTokenDetails(to menu: NSMenu) {
         let root = NSMenuItem(title: "Token 用量详情", action: nil, keyEquivalent: "")
         let details = NSMenu()
+        details.addItem(NSMenuItem(title: "打开后加载详情", action: nil, keyEquivalent: ""))
+        details.delegate = self
+        self.tokenDetailsMenu = details
+        root.submenu = details
+        menu.addItem(root)
+    }
+
+    private func populateTokenDetails(_ details: NSMenu) {
+        details.removeAllItems()
         func note(_ title: String, in target: NSMenu) {
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             item.isEnabled = false
@@ -251,6 +290,10 @@ final class AccountManager: NSObject {
             let item = NSMenuItem(title: profile.label, action: nil, keyEquivalent: "")
             let account = NSMenu()
             let status = self.store.statuses[profile.id] ?? .notSetUp
+            if let error = status.snapshot?.tokenActivityError {
+                note("Token 统计读取失败，保留上次记录", in: account)
+                note(LogRedactor.excerpt(error, maxLength: 160), in: account)
+            }
             if let activity = status.snapshot?.tokenActivity {
                 if let total = activity.lifetimeTokens {
                     note("累计：\(TokenUsagePresentation.exact(total)) Token"
@@ -276,8 +319,29 @@ final class AccountManager: NSObject {
             item.submenu = account
             details.addItem(item)
         }
-        root.submenu = details
-        menu.addItem(root)
+    }
+
+    private func refreshVisibleItems() {
+        guard self.isMenuOpen else { return }
+        if let host = self.headerHost {
+            let header = self.usageHeader()
+            host.rootView = header
+            host.frame.size.height = header.showsFailure ? UsageHeaderView.failureHeight : UsageHeaderView.baseHeight
+        }
+        let records = ProfileHealth.build(profiles: self.store.config.profiles,
+            statuses: self.store.statuses, activeProfileId: self.store.liveProfileId,
+            canActivateAuth: { self.store.authCanBeActivated(for: $0) })
+        for health in records {
+            guard let host = self.profileHosts[health.profile.id] else { continue }
+            let duplicate = self.duplicateSummary(for: health.profile.id)
+            host.rootView = ProfileCardView(profile: health.profile, status: health.status,
+                isActive: health.isActive, duplicateLine: duplicate,
+                onSwitch: { [weak self] in self?.selectProfile(health.profile.id) })
+            host.frame.size.height = self.cardHeight(for: health.status, hasDuplicate: duplicate != nil)
+        }
+        self.refreshMenuItem?.title = self.usageProvider.isRefreshing
+            ? "正在刷新…（点击后再刷新一次）" : "刷新账号额度"
+        self.menu?.update()
     }
 
     private func duplicateSummary(for profileID: String) -> String? {
@@ -338,6 +402,7 @@ final class AccountManager: NSObject {
 
         let store = self.store
         let workspace = store.relaunchWorkspacePath()
+        self.usageProvider.cancelRefreshes()
         store.beginAuthMutation()
         Task { @MainActor [weak self] in
             guard let self else {
@@ -494,6 +559,7 @@ final class AccountManager: NSObject {
 
     private func startLogin(for id: String) {
         let store = self.store
+        self.usageProvider.cancelRefreshes()
         store.beginAuthMutation()
         CodexBridge.startLogin(profileId: id) { [weak self] result in
             guard let self else {
@@ -515,7 +581,6 @@ final class AccountManager: NSObject {
     }
 
     private func requestRefresh(force: Bool = false) {
-        guard !self.usageProvider.isRefreshing else { return }
         self.usageProvider.refreshAll(force: force)
     }
 

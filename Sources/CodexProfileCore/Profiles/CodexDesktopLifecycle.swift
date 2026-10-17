@@ -173,7 +173,7 @@ public struct CodexDesktopLifecycle {
             let installation = try self.validatedInstallation(at: appOverride)
             let cli = self.canonicalPath(cliOverride ?? installation.bundledCLIPath)
             try self.validateBundledCLI(cli)
-            guard cli == installation.bundledCLIPath else {
+            guard self.cli(cli, belongsTo: installation) else {
                 throw CodexDesktopLifecycleError.launchTargetMismatch(appOverride, cli)
             }
             return LaunchTarget(installation: installation, bundledCLIPath: cli)
@@ -184,12 +184,19 @@ public struct CodexDesktopLifecycle {
             if self.value("CODEX_PROFILE_TEST_ASSUME_CODEX_STOPPED") == "1" {
                 return LaunchTarget(installation: nil, bundledCLIPath: canonicalCLI)
             }
-            let appPath = URL(fileURLWithPath: canonicalCLI)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent().path
+            // New bundles nest CodexCLI.app inside the desktop application.
+            // Walk to the enclosing desktop bundle instead of assuming a fixed depth.
+            var parent = URL(fileURLWithPath: canonicalCLI).deletingLastPathComponent()
+            while parent.path != "/" {
+                if let candidate = try? self.validatedInstallation(at: parent.path),
+                   self.cli(canonicalCLI, belongsTo: candidate) {
+                    return LaunchTarget(installation: candidate, bundledCLIPath: canonicalCLI)
+                }
+                parent.deleteLastPathComponent()
+            }
+            let appPath = parent.path
             let installation = try self.validatedInstallation(at: appPath)
-            guard canonicalCLI == installation.bundledCLIPath else {
+            guard self.cli(canonicalCLI, belongsTo: installation) else {
                 throw CodexDesktopLifecycleError.launchTargetMismatch(appPath, canonicalCLI)
             }
             return LaunchTarget(installation: installation, bundledCLIPath: canonicalCLI)
@@ -232,8 +239,9 @@ public struct CodexDesktopLifecycle {
         let executable = appURL
             .appendingPathComponent("Contents/MacOS")
             .appendingPathComponent(executableName).path
-        let bundledCLI = appURL
-            .appendingPathComponent("Contents/Resources/codex").path
+        let candidates = self.bundledCLIPaths(in: appURL)
+        let bundledCLI = candidates.first(where: { self.fileManager.isExecutableFile(atPath: $0) })
+            ?? appURL.appendingPathComponent("Contents/Resources/codex").path
         guard self.fileManager.isExecutableFile(atPath: executable) else {
             throw CodexDesktopLifecycleError.invalidInstallation(appPath)
         }
@@ -241,7 +249,21 @@ public struct CodexDesktopLifecycle {
             appPath: canonicalAppPath,
             bundleIdentifier: Self.bundleIdentifier,
             executablePath: self.canonicalPath(executable),
-            bundledCLIPath: bundledCLI)
+            bundledCLIPath: self.canonicalPath(bundledCLI))
+    }
+
+    private func bundledCLIPaths(in appURL: URL) -> [String] {
+        // Prefer the native binary so process ownership checks see the same path.
+        ["Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+         "Contents/Resources/codex-cli/bin/codex",
+         "Contents/Resources/codex"].map {
+            self.canonicalPath(appURL.appendingPathComponent($0).path)
+        }
+    }
+
+    private func cli(_ path: String, belongsTo installation: CodexDesktopInstallation) -> Bool {
+        guard let appPath = installation.appPath else { return false }
+        return self.bundledCLIPaths(in: URL(fileURLWithPath: appPath)).contains(path)
     }
 
     private func resolveInstallations() -> [CodexDesktopInstallation] {

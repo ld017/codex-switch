@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var sharedHistoryRestartCoordinator =
         SharedHistoryRestartCoordinator(system: system)
     private var refreshTimer: Timer?
+    private var statusRefreshTask: Task<Void, Never>?
     private var pendingAction: SwitcherURLAction?
 
     private var switching: Bool {
@@ -123,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshStatus()
         accounts.start()
         refreshTimer = Timer.scheduledTimer(
-            withTimeInterval: 10,
+            withTimeInterval: 60,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor in
@@ -147,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         refreshTimer?.invalidate()
+        statusRefreshTask?.cancel()
         accounts.stop()
         NSAppleEventManager.shared().removeEventHandler(
             forEventClass: AEEventClass(kInternetEventClass),
@@ -172,6 +174,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshStatus()
         accounts.menuWillOpen()
         rebuildMenu()
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        accounts.menuDidClose()
     }
 
     private func configureStatusItem() {
@@ -264,27 +270,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginItem.state = loginItems.isEnabled ? .on : .off
         quitItem.isEnabled = !switching
         refreshSharedHistoryItem.isEnabled = !switching
-        Task {
-            let online = await system.sub2APIIsOnline()
-            serviceItem.title = online
-                ? "Sub2API 服务：在线"
-                : "Sub2API 服务：离线"
-        }
-        Task {
-            let conflicts = await system.proxyEnvironmentConflicts()
+        guard statusRefreshTask == nil else { return }
+        statusRefreshTask = Task {
+            defer { self.statusRefreshTask = nil }
+            async let onlineCheck = system.sub2APIIsOnline()
+            async let conflictsCheck = system.proxyEnvironmentConflicts()
+            async let configuredCheck = system.sharedHistoryIsConfigured()
+            let (online, conflicts, configured) = await (onlineCheck, conflictsCheck, configuredCheck)
+            guard !Task.isCancelled else { return }
+            serviceItem.title = online ? "Sub2API 服务：在线" : "Sub2API 服务：离线"
             if !conflicts.isEmpty {
                 proxyEnvironmentItem.title = "代理状态：环境冲突"
             } else {
                 let readiness = await system.clashReadinessStatus()
-                proxyEnvironmentItem.title = "代理状态："
-                    + readiness.userDescription
+                guard !Task.isCancelled else { return }
+                proxyEnvironmentItem.title = "代理状态：" + readiness.userDescription
             }
-        }
-        Task {
-            let configured = await system.sharedHistoryIsConfigured()
             sharedHistoryStatusItem.title = configured
-                ? "共享任务/项目：已配置"
-                : "共享任务/项目：待配置"
+                ? "共享任务/项目：已配置" : "共享任务/项目：待配置"
         }
     }
 

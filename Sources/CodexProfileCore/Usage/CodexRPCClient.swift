@@ -71,7 +71,8 @@ struct RPCTokenActivityResponse: Decodable {
 
 struct RPCRateLimitResetCredits: Decodable {
     let availableCount: Int
-    let credits: [RPCRateLimitResetCredit]
+    // The CLI may return only the server's count, with null or no details.
+    let credits: [RPCRateLimitResetCredit]?
 }
 
 struct RPCRateLimitResetCredit: Decodable {
@@ -404,6 +405,9 @@ private final class CodexRPCClient {
     func shutdown() {
         self.stdoutPipe.fileHandleForReading.readabilityHandler = nil
         self.stderrPipe.fileHandleForReading.readabilityHandler = nil
+        self.stdoutLineContinuation.finish()
+        self.stderrTail.close()
+        try? self.stdinPipe.fileHandleForWriting.close()
         guard self.process.isRunning else { return }
         self.process.terminate()
 
@@ -428,6 +432,7 @@ private final class CodexRPCClient {
         method: String,
         params: [String: Any]? = nil,
         timeout: TimeInterval? = nil) async throws -> [String: Any] {
+        try Task.checkCancellation()
         let id = self.nextID
         self.nextID += 1
         try self.sendRequest(id: id, method: method, params: params)
@@ -451,6 +456,7 @@ private final class CodexRPCClient {
                 return SendableMessage(value: message)
             }
         }
+        try Task.checkCancellation()
         return wrapped.value
     }
 
@@ -536,7 +542,10 @@ public enum CLIUsageFetcher {
         codexConfigURL: URL,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         clientName: String = "CodexProfileSwitcher",
-        clientVersion: String) async throws -> UsageSnapshot {
+        clientVersion: String,
+        includeTokenActivity: Bool = true,
+        onQuota: (@Sendable (UsageSnapshot) async -> Void)? = nil) async throws -> UsageSnapshot {
+        try Task.checkCancellation()
         let executablePath = CodexCLIResolver.resolvePath(environment: environment)
         guard let executablePath else { throw CodexRPCError.cliNotFound }
 
@@ -562,13 +571,23 @@ public enum CLIUsageFetcher {
         var snapshot = try self.makeSnapshot(
             from: response.rateLimits,
             resetCredits: response.rateLimitResetCredits)
+        try Task.checkCancellation()
+        await onQuota?(snapshot)
+        try Task.checkCancellation()
+        guard includeTokenActivity else { return snapshot }
         // A missing/unsupported activity endpoint must not discard valid quotas.
         do {
             snapshot.tokenActivity = try await rpc.fetchTokenActivity()
-            snapshot.tokenActivityUnavailable = snapshot.tokenActivity?.lifetimeTokens == nil
+            let incomplete = snapshot.tokenActivity?.lifetimeTokens == nil
+                || snapshot.tokenActivity?.dailyUsageBuckets == nil
+            snapshot.tokenActivityUnavailable = incomplete
+            if incomplete {
+                snapshot.tokenActivityError = "Token activity response is incomplete"
+            }
         } catch {
             if Task.isCancelled { throw CancellationError() }
             snapshot.tokenActivityUnavailable = true
+            snapshot.tokenActivityError = LogRedactor.excerpt(error.localizedDescription, maxLength: 240)
         }
         return snapshot
     }
@@ -620,7 +639,7 @@ public enum CLIUsageFetcher {
         let secondaryResetAt = rateLimits.secondary?.resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
         let primaryUsedPercent = rateLimits.primary.map { Int($0.usedPercent.rounded()) } ?? 0
         let secondaryUsedPercent = rateLimits.secondary.map { Int($0.usedPercent.rounded()) } ?? 0
-        let nextResetCreditExpiresAt = resetCredits?.credits
+        let nextResetCreditExpiresAt = resetCredits?.credits?
             .filter { $0.status == "available" }
             .compactMap(\.expiresAt)
             .min()
