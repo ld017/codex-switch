@@ -60,6 +60,14 @@ public static class Program
             {
                 Console.WriteLine(JsonSerializer.Serialize(new { jsonrpc = "2.0", id = id.GetInt32(), error = new { message = "{\"access_token\":\"secret-access\"}" } }));
             }
+            else if (mode is "oversized-line" or "oversized-unterminated")
+            {
+                Console.Write("synthetic-payload-secret");
+                for (var index = 0; index < 257; index++) Console.Write(new string('x', 4096));
+                if (mode == "oversized-line") Console.WriteLine();
+                await Console.Out.FlushAsync();
+                if (mode == "oversized-unterminated") await Task.Delay(Timeout.InfiniteTimeSpan);
+            }
             else if (method == "account/usage/read")
             {
                 if (mode == "token-timeout") await Task.Delay(Timeout.InfiniteTimeSpan);

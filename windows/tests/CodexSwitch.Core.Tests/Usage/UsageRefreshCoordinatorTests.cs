@@ -68,7 +68,7 @@ public sealed class UsageRefreshCoordinatorTests
         finally { cancellation.Cancel(); }
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh);
-        Assert.False((await cache.LoadAsync(default)).ContainsKey(profile.Id));
+        Assert.Equal(12, (await cache.LoadAsync(default))[profile.Id].Snapshot!.PrimaryUsedPercent);
     }
 
     [Fact]

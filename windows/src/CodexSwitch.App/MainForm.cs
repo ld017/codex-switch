@@ -5,6 +5,7 @@ using CodexSwitch.Core.Auth;
 using CodexSwitch.Core.Codex;
 using CodexSwitch.Core.Configuration;
 using CodexSwitch.Core.Diagnostics;
+using CodexSwitch.Core.Files;
 using CodexSwitch.Core.Presentation;
 using CodexSwitch.Core.Usage;
 
@@ -19,9 +20,14 @@ public sealed class MainForm : Form
     private readonly Action<string, Exception>? _errorPresenter;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 60 * 1000 };
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly RefreshRequestScheduler _refreshRequests = new();
     private CancellationTokenSource? _refreshCancellation;
     private Task _refreshTask = Task.CompletedTask;
     private Task _operationTask = Task.CompletedTask;
+    private Task _maintenanceTask = Task.CompletedTask;
+    private DateTimeOffset? _lastRefreshStartedAt;
+    private DateTimeOffset? _lastMaintenanceAt;
+    private bool _wasMinimized;
     private bool _closingAfterCleanup;
     private bool _closingInProgress;
     private bool _refreshing;
@@ -72,7 +78,7 @@ public sealed class MainForm : Form
         _totalTokens = _tokenOverview.TotalLabel;
         _monthTokens = _tokenOverview.MonthLabel;
         _tokenCoverage = _tokenOverview.CoverageLabel;
-        Text = "Codex Switch 1.0.6";
+        Text = "Codex Switch 1.0.7";
         DoubleBuffered = true;
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96, 96);
@@ -85,6 +91,7 @@ public sealed class MainForm : Form
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? Icon;
         StartPosition = FormStartPosition.CenterScreen;
         if (startMinimized) WindowState = FormWindowState.Minimized;
+        _wasMinimized = startMinimized;
 
         _root = new BufferedTableLayoutPanel
         {
@@ -114,7 +121,12 @@ public sealed class MainForm : Form
         _accountsPanel.SizeChanged += (_, _) => LayoutAccountCards();
 
         Shown += (_, _) => _ = RunUiEventAsync("初始化", InitializeAsync);
-        _timer.Tick += (_, _) => _ = RunUiEventAsync("后台刷新", () => RefreshUsageAsync(false), showErrors: false);
+        _timer.Tick += (_, _) =>
+        {
+            TryStartMaintenance();
+            _ = RunUiEventAsync("后台刷新", () => RefreshUsageAsync(false), showErrors: false);
+        };
+        UpdateAutomaticRefreshInterval();
         _timer.Start();
         FormClosing += (_, args) =>
         {
@@ -124,6 +136,8 @@ public sealed class MainForm : Form
             try
             {
                 _timer.Stop();
+                _refreshRequests.Close();
+                ++_refreshSequence;
                 _lifetime.Cancel();
                 _refreshCancellation?.Cancel();
                 if (!args.Cancel) return;
@@ -137,14 +151,35 @@ public sealed class MainForm : Form
             try { _timer.Dispose(); _lifetime.Cancel(); _refreshCancellation?.Cancel(); }
             catch (Exception error) { WriteLog("关闭清理", error.ToString()); }
         };
-        Disposed += (_, _) => _timer.Dispose();
+        Disposed += (_, _) =>
+        {
+            _refreshRequests.Close();
+            _timer.Dispose();
+            _lifetime.Cancel();
+            _refreshCancellation?.Cancel();
+        };
         ResumeLayout(false);
         PerformLayout();
         Resize += (_, _) =>
         {
-            try { if (!_initialLayoutApplied && WindowState == FormWindowState.Normal) RenderAccounts(); }
+            try
+            {
+                if (!_initialLayoutApplied && WindowState == FormWindowState.Normal) RenderAccounts();
+                UpdateAutomaticRefreshInterval();
+            }
             catch (Exception error) { WriteLog("初始化窗口布局", error.ToString()); }
         };
+    }
+
+    private void UpdateAutomaticRefreshInterval()
+    {
+        var minimized = WindowState == FormWindowState.Minimized;
+        var interval = (int)RefreshPolicy.AutomaticInterval(minimized).TotalMilliseconds;
+        if (_timer.Interval != interval) _timer.Interval = interval;
+        var restored = _wasMinimized && !minimized;
+        _wasMinimized = minimized;
+        if (restored && RefreshPolicy.ShouldRefreshAfterRestore(_lastRefreshStartedAt, DateTimeOffset.UtcNow))
+            _ = RunUiEventAsync("恢复后刷新", () => RefreshUsageAsync(false), showErrors: false);
     }
 
     private async Task CompleteCloseAsync()
@@ -184,7 +219,7 @@ public sealed class MainForm : Form
             if (subtitle.MaximumSize != maximum) subtitle.MaximumSize = maximum;
         };
         header.Controls.Add(titleArea, 0, 0);
-        header.Controls.Add(new Label { Text = "1.0.6", AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = MutedColor, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Segoe UI", 8f) }, 1, 0);
+        header.Controls.Add(new Label { Text = "1.0.7", AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = MutedColor, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Segoe UI", 8f) }, 1, 0);
         return header;
     }
 
@@ -286,6 +321,7 @@ public sealed class MainForm : Form
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception error) { ShowError("初始化", error); }
+        finally { TryStartMaintenance(); }
     }
 
     private async Task ReloadAsync()
@@ -310,7 +346,7 @@ public sealed class MainForm : Form
         var sub2Online = await _services.Sub2Api.IsOnlineAsync(_lifetime.Token);
         if (_lifetime.IsCancellationRequested || IsDisposed) return;
         _providerStatus.Text = _provider == Provider.OpenAI ? "OpenAI 官方 · 当前连接" : "Sub2API · 当前连接";
-        _sub2Status.Text = $"Sub2API 服务{(sub2Online ? "在线" : "离线")}  ·  自动刷新 1 分钟";
+        _sub2Status.Text = $"Sub2API 服务{(sub2Online ? "在线" : "离线")}  ·  自动刷新 1 分钟 / 最小化 5 分钟";
         if (_openAiButton is not null) _openAiButton.Tone = _provider == Provider.OpenAI ? DashboardButtonTone.Selected : DashboardButtonTone.Neutral;
         if (_sub2Button is not null) _sub2Button.Tone = _provider == Provider.Sub2Api ? DashboardButtonTone.Selected : DashboardButtonTone.Neutral;
         _syncingStartup = true;
@@ -467,9 +503,29 @@ public sealed class MainForm : Form
 
     private Task RefreshUsageAsync(bool showErrors)
     {
-        if (_busy || _refreshing || _lifetime.IsCancellationRequested) return _refreshTask;
-        _refreshTask = RefreshUsageCoreAsync(showErrors);
+        if (_busy || _lifetime.IsCancellationRequested || IsDisposed || Disposing) return _refreshTask;
+        if (!_refreshRequests.TryStart(forceTokens: showErrors)) return _refreshTask;
+        _refreshTask = DrainRefreshRequestsAsync(showErrors);
         return _refreshTask;
+    }
+
+    private async Task DrainRefreshRequestsAsync(bool forceTokens)
+    {
+        try
+        {
+            do
+            {
+                await RefreshUsageCoreAsync(forceTokens);
+                // Only explicit user requests create another round; automatic requests merge.
+                forceTokens = true;
+            }
+            while (_refreshRequests.CompleteRound());
+        }
+        finally
+        {
+            _refreshRequests.Abandon();
+            TryStartMaintenance();
+        }
     }
 
     private async Task RefreshUsageCoreAsync(bool showErrors)
@@ -480,11 +536,14 @@ public sealed class MainForm : Form
         _refreshCancellation = cancellation;
         try
         {
+            await _maintenanceTask.WaitAsync(cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            _lastRefreshStartedAt = DateTimeOffset.UtcNow;
             _refreshStatus.Text = "正在刷新…";
             _statusText.Text = "正在刷新额度，账号逐个更新…";
             var progress = new Progress<(Guid Id, UsageState State)>(update =>
             {
-                if (IsDisposed || sequence != _refreshSequence || !_refreshing || _busy) return;
+                if (IsDisposed || _lifetime.IsCancellationRequested || sequence != _refreshSequence || !_refreshing || _busy) return;
                 // Leave the last visible values in place during background requests.
                 // Only a completed account updates its existing card.
                 if (update.State.Status == UsageStatus.Refreshing) return;
@@ -495,16 +554,16 @@ public sealed class MainForm : Form
                 RenderTokenOverview();
             });
             _usage = await _services.Usage.RefreshAllAsync(cancellation.Token,
-                (id, state) => ((IProgress<(Guid, UsageState)>)progress).Report((id, state)));
+                (id, state) => ((IProgress<(Guid, UsageState)>)progress).Report((id, state)), forceTokens: showErrors);
             cancellation.Token.ThrowIfCancellationRequested();
             // Reconcile external login/provider changes without replacing existing cards.
             await ReloadAsync();
             var succeeded = _accounts.Count(account => _usage.GetValueOrDefault(account.Id)?.Status == UsageStatus.Available);
-            var tokenSucceeded = _accounts.Count(account => _usage.GetValueOrDefault(account.Id) is { Status: UsageStatus.Available, Snapshot.TokenUsage.Status: TokenUsageStatus.Available });
+            var tokenAvailable = _accounts.Count(account => _usage.GetValueOrDefault(account.Id)?.Snapshot?.TokenUsage?.Snapshot is not null);
             var total = _accounts.Count;
             _refreshStatus.Text = total == 0 ? "无账号" : $"{DateTime.Now:HH:mm} · {succeeded}/{total}";
-            _statusText.Text = total == 0 ? "请先登录账号" : $"额度 {succeeded}/{total}  ·  Token {tokenSucceeded}/{total}  ·  "
-                + (succeeded == total && tokenSucceeded == total ? "刷新完成" : "未获取项保留缓存，可在 Token 详情查看原因");
+            _statusText.Text = total == 0 ? "请先登录账号" : $"额度 {succeeded}/{total}  ·  可用 Token 统计 {tokenAvailable}/{total}  ·  "
+                + "Token 独立读取时间见详情";
             foreach (var account in _accounts)
             {
                 if (_usage.GetValueOrDefault(account.Id) is { Status: not UsageStatus.Available, Message: { } message })
@@ -532,7 +591,7 @@ public sealed class MainForm : Form
         if (_busy || provider == _provider) return;
         var name = provider == Provider.OpenAI ? "OpenAI 官方" : "Sub2API";
         if (MessageBox.Show($"切换到 {name}？请先结束 Codex 中正在运行的任务。切换会正常退出并重新打开 Codex；退出超时将取消切换。", "切换连接", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
-        await RunUiOperationAsync("切换连接", async () =>
+        await RunUiOperationAndRefreshAsync("切换连接", async () =>
         {
             if (provider == Provider.Sub2Api && !await _services.Sub2Api.IsOnlineAsync(_lifetime.Token))
                 throw new InvalidOperationException("Sub2API 未在 127.0.0.1:8080 响应。");
@@ -556,7 +615,7 @@ public sealed class MainForm : Form
         if (profile is null || profile.Id == _activeProfileId) return;
         if (_provider != Provider.OpenAI) { MessageBox.Show("请先切换到 OpenAI 官方连接。", "Codex Switch"); return; }
         if (MessageBox.Show($"切换到账号“{profile.Label}”？\n\n确认后将自动关闭并重新打开 Codex。正在运行的任务会被中断；正常退出超时后将强制终止残留 Codex 进程，无需手动退出。", "切换账号", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
-        await RunUiOperationAsync("切换账号", async () =>
+        await RunUiOperationAndRefreshAsync("切换账号", async () =>
         {
             await ApplyAccountAsync(profile.Id);
         });
@@ -566,7 +625,7 @@ public sealed class MainForm : Form
     {
         var label = LoginPrompt.Show(this, mode == LoginMode.Browser ? "登录新账号" : "设备码登录", "账号名称：");
         if (label is null) return;
-        await RunUiOperationAsync("登录账号", async () =>
+        await RunUiOperationAndRefreshAsync("登录账号", async () =>
         {
             var profile = await _services.Login.LoginAsync(label, mode, duplicate =>
                 MessageBox.Show($"账号“{duplicate.Label}”已存在，是否更新凭据？", "重复账号", MessageBoxButtons.YesNo) == DialogResult.Yes, _lifetime.Token);
@@ -576,7 +635,6 @@ public sealed class MainForm : Form
             {
                 await ApplyAccountAsync(profile.Id, preserveTargetCredentials: true);
             }
-            _usage = await _services.Usage.RefreshAllAsync(_lifetime.Token);
         });
     }
 
@@ -597,14 +655,13 @@ public sealed class MainForm : Form
             return;
         }
 
-        await RunUiOperationAsync("重新登录账号", async () =>
+        await RunUiOperationAndRefreshAsync("重新登录账号", async () =>
         {
             await _services.Login.ReauthenticateAsync(profile, LoginMode.Browser, _lifetime.Token);
             if (_provider == Provider.OpenAI && profile.Id == _activeProfileId)
             {
                 await ApplyAccountAsync(profile.Id, preserveTargetCredentials: true);
             }
-            _usage = await _services.Usage.RefreshAllAsync(_lifetime.Token);
         });
     }
 
@@ -681,14 +738,21 @@ public sealed class MainForm : Form
     }
 
     private Task RunUiOperationAsync(string name, Func<Task> action)
+        => StartUiOperationAsync(name, action, refreshAfterSuccess: false);
+
+    private Task RunUiOperationAndRefreshAsync(string name, Func<Task> action)
+        => StartUiOperationAsync(name, action, refreshAfterSuccess: true);
+
+    private Task StartUiOperationAsync(string name, Func<Task> action, bool refreshAfterSuccess)
     {
         if (_busy || _lifetime.IsCancellationRequested) return Task.CompletedTask;
-        _operationTask = RunUiOperationCoreAsync(name, action);
+        _operationTask = RunUiOperationCoreAsync(name, action, refreshAfterSuccess);
         return _operationTask;
     }
 
-    private async Task RunUiOperationCoreAsync(string name, Func<Task> action)
+    private async Task RunUiOperationCoreAsync(string name, Func<Task> action, bool refreshAfterSuccess)
     {
+        var completed = false;
         try
         {
             WriteLog("操作阶段", $"{name} 确认通过，准备锁定界面");
@@ -696,21 +760,35 @@ public sealed class MainForm : Form
             WriteLog("操作阶段", $"{name} 暂停并等待后台刷新");
             _refreshCancellation?.Cancel();
             await _refreshTask;
+            await _maintenanceTask.WaitAsync(_lifetime.Token);
             _lifetime.Token.ThrowIfCancellationRequested();
             WriteLog("操作阶段", $"{name} 开始执行");
             await action();
             if (_lifetime.IsCancellationRequested || IsDisposed) return;
             await ReloadAsync();
             _statusText.Text = $"{name}完成";
+            completed = true;
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception error) { if (!IsDisposed) ShowError(name, error); }
-        finally { if (!IsDisposed) SetBusy(false); }
+        finally
+        {
+            if (!IsDisposed)
+            {
+                SetBusy(false);
+                if (completed && refreshAfterSuccess)
+                    // The local operation is complete. Slow accounts run outside its busy transaction.
+                    _ = RunUiEventAsync("操作后刷新", () => RefreshUsageAsync(true), showErrors: false);
+                else TryStartMaintenance();
+            }
+        }
     }
 
     private void SetBusy(bool busy, string? status = null)
     {
         _busy = busy;
+        _refreshRequests.SetBlocked(busy);
+        if (busy) ++_refreshSequence;
         if (IsDisposed || Disposing) return;
         if (status is not null) _statusText.Text = status;
         UseWaitCursor = busy;
@@ -790,12 +868,30 @@ public sealed class MainForm : Form
 
     private void WriteLog(string title, string message)
     {
+        try { _ = RotatingLogWriter.TryAppend(_services.Paths.LogDirectory, title, message); }
+        catch { /* Logging must never turn a recoverable switch error into a UI fault. */ }
+    }
+
+    private void TryStartMaintenance()
+    {
+        if (_services.Maintenance is null || _busy || _refreshing || _refreshRequests.IsRunning
+            || _lifetime.IsCancellationRequested || IsDisposed || Disposing || !_maintenanceTask.IsCompleted) return;
+        var now = DateTimeOffset.UtcNow;
+        if (_lastMaintenanceAt is { } previous && now - previous < RefreshPolicy.MaintenanceInterval) return;
+        _lastMaintenanceAt = now;
+        _maintenanceTask = RunMaintenanceAsync();
+    }
+
+    private async Task RunMaintenanceAsync()
+    {
         try
         {
-            Directory.CreateDirectory(_services.Paths.LogDirectory);
-            File.AppendAllText(Path.Combine(_services.Paths.LogDirectory, "codex-switch.log"), $"{DateTimeOffset.Now:O} {title}: {SecretRedactor.Redact(message)}{Environment.NewLine}");
+            var result = await Task.Run(() => _services.Maintenance!.RunAsync(_lifetime.Token), CancellationToken.None).ConfigureAwait(false);
+            WriteLog("数据维护", $"临时目录 {result.DeletedTemporaryHomes}，日志 {result.DeletedLogFiles}，备份 {result.DeletedAuthBackups}，"
+                + $"待恢复 {result.RecoveryDirectories}，未知凭据目录 {result.UnknownCredentialDirectories}，失败 {result.Failures}，释放 {result.FreedBytes} 字节");
         }
-        catch { /* Logging must never turn a recoverable switch error into a UI fault. */ }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception error) { WriteLog("数据维护失败", error.GetType().Name); }
     }
 
     private void AddAction(TableLayoutPanel layout, string text, Func<Task> action, int column, int row)

@@ -1,0 +1,48 @@
+# Windows 1.0.7 验证记录
+
+基线：Windows 1.0.6（`7f005f4`），Core 193、Integration 93，共 286 项通过。本轮基于 main 的 macOS 2.3.2 提交继续开发，不回退 macOS 更改。
+
+最终完整回归：Core246项、Integration106项，共352项通过，无失败。独立审查提出的中断原子凭据文件边界已复核闭环；Release重建0警告、0错误。
+
+## 刷新与资源
+
+合成 Core 场景：5 个隔离假账号、连续 100 轮自动刷新、每次额度先回调、Token 根据300秒策略读取。未读取真实账号或请求公网接口，也没有启动真实查询CLI。
+
+| 指标 | 结果 |
+| --- | ---: |
+| 额度读取 | 500 次 |
+| Token 读取 | 5 次 |
+| 峰值并发查询任务 | 2 |
+| 100轮耗时 | 10.115 秒 |
+| 每轮结束临时目录残留 | 0 |
+| 第10轮测试宿主私有内存 | 28,839,936 字节 |
+| 第100轮测试宿主私有内存 | 28,725,248 字节 |
+| 第10/100轮测试宿主句柄 | 407 / 407 |
+
+这些内存样本来自 .NET 测试宿主，不能与已安装WinForms程序约41MiB私有内存直接比较，也不能据此宣称整机内存下降比例。100轮中内存有波动，未使用强制GC或WorkingSet清空；此短时合成场景不能证明长期运行绝无泄漏。
+
+生产策略的结构变化可直接核验：查询并发上限3→2，最小化轮询60→300秒，Token自动读取间隔300秒。这些减少瞬时工作量和请求次数；并发下降也可能延长整批账号的完成时间。当前账号优先和额度先显示负责改善可见响应。
+
+## 安全与输入边界
+
+- 以FakeCli/任务屏障验证额度先于慢Token发布；Token错误/取消保留已取得额度和原统计时间。
+- 覆盖强刷合并、操作后新轮、关闭取消、维护等待、300秒复用与失败冷却。
+- 覆盖增量stdout上限、8MiB缓存、366个有效日期去重与累计数保持。
+- 对隔离目录验证活动租约、pending/ready/recovery状态、日志轮转/旧日志裁剪、成功备份保留与未知备份保护。
+- 目录链接测试在系统支持创建链接时执行链接断言；未以此推断能够抵御所有恶意并发文件替换。
+- 独立审查指出的“失败时仅有凭据原子临时文件”场景增加回归，只有确认不存在未知凭据才允许清理。
+
+## 验证边界
+
+未对承载当前工作任务的Codex执行真实切号或强制关闭。UI使用合成账号与假生命周期服务验证；网络和服务统计自身的延迟仍可能存在。
+
+发布采用运行时自带的win-x64单文件、精确安装器白名单和便携ZIP单文件条目。安装器未在本轮覆盖现有安装；本机运行的旧版不会因发布自动更新。
+
+## 复验命令
+
+```powershell
+dotnet test windows/CodexSwitch.sln -c Release
+$env:CODEX_SWITCH_BENCHMARK_OUTPUT = Join-Path (Get-Location) 'artifacts\resource-soak.json'
+dotnet test windows/tests/CodexSwitch.Core.Tests/CodexSwitch.Core.Tests.csproj -c Release --filter FullyQualifiedName~ResourceSoakTests
+windows/scripts/package-release.ps1 -SkipTests
+```

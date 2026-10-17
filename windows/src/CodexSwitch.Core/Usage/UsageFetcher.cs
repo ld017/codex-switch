@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using CodexSwitch.Core.Auth;
@@ -14,10 +13,11 @@ public sealed class UsageFetcher
     private readonly AccountStore _accounts;
     private readonly string _configPath;
     private readonly string _temporaryRoot;
-    private readonly RateLimitsFetcher _fetch;
+    private readonly StreamingRateLimitsFetcher _fetch;
     private readonly ITemporaryDirectoryCleaner _cleaner;
     private readonly string? _liveAuthPath;
-    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _accountGates = new();
+    // Fixed stripes preserve same-account exclusion without retaining deleted account IDs.
+    private readonly SemaphoreSlim[] _accountGates = Enumerable.Range(0, 32).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
     public UsageFetcher(
         AccountStore accounts,
@@ -26,6 +26,10 @@ public sealed class UsageFetcher
         RateLimitsFetcher fetch,
         ITemporaryDirectoryCleaner? cleaner = null,
         string? liveAuthPath = null)
+        : this(accounts, configPath, temporaryRoot, (home, _, _, token) => fetch(home, token), cleaner, liveAuthPath) { }
+
+    public UsageFetcher(AccountStore accounts, string configPath, string temporaryRoot,
+        StreamingRateLimitsFetcher fetch, ITemporaryDirectoryCleaner? cleaner = null, string? liveAuthPath = null)
     {
         _accounts = accounts;
         _configPath = configPath;
@@ -35,32 +39,28 @@ public sealed class UsageFetcher
         _liveAuthPath = liveAuthPath;
     }
 
-    public async Task<UsageSnapshot> FetchAsync(Guid profileId, CancellationToken cancellationToken)
+    public async Task<UsageSnapshot> FetchAsync(Guid profileId, CancellationToken cancellationToken,
+        UsageFetchOptions? options = null, Action<UsageSnapshot>? quotaReceived = null)
     {
-        var gate = _accountGates.GetOrAdd(profileId, _ => new SemaphoreSlim(1, 1));
+        var gate = _accountGates[(int)((uint)profileId.GetHashCode() % (uint)_accountGates.Length)];
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { return await FetchIsolatedAsync(profileId, cancellationToken).ConfigureAwait(false); }
+        try { return await FetchIsolatedAsync(profileId, cancellationToken, options ?? new(), quotaReceived).ConfigureAwait(false); }
         finally { gate.Release(); }
     }
 
-    private async Task<UsageSnapshot> FetchIsolatedAsync(Guid profileId, CancellationToken cancellationToken)
+    private async Task<UsageSnapshot> FetchIsolatedAsync(Guid profileId, CancellationToken cancellationToken,
+        UsageFetchOptions options, Action<UsageSnapshot>? quotaReceived)
     {
         Directory.CreateDirectory(_temporaryRoot);
-        try
-        {
-            await _cleaner.CleanStaleAsync(_temporaryRoot, TimeSpan.FromMinutes(5), cancellationToken);
-        }
-        catch (Exception error) when (error is not OperationCanceledException)
-        {
-            // Stale temporary data must not prevent a fresh usage request.
-        }
-
         var home = Path.Combine(_temporaryRoot, $"usage-{profileId:N}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(home);
-        var keepHome = false;
+        using var lease = TemporaryHomeLease.Create(home);
+        var safeToDelete = false;
+        var requestStarted = false;
+        byte[]? originalAuth = null;
         try
         {
-            var originalAuth = await _accounts.LoadAuthAsync(profileId, cancellationToken);
+            originalAuth = await _accounts.LoadAuthAsync(profileId, cancellationToken);
             var externalAuth = await ReadLiveCredentialsAsync(profileId, originalAuth, cancellationToken).ConfigureAwait(false);
             if (externalAuth is not null)
             {
@@ -76,40 +76,74 @@ public sealed class UsageFetcher
             var source = File.Exists(_configPath) ? await File.ReadAllTextAsync(_configPath, cancellationToken) : "model = \"gpt-5\"\n";
             await File.WriteAllTextAsync(Path.Combine(home, "config.toml"), OpenAiUsageConfig.Force(source), Utf8NoBom, cancellationToken);
             RateLimitsResponse response;
-            try { response = await _fetch(home, cancellationToken).ConfigureAwait(false); }
+            DateTimeOffset? quotaDate = null;
+            try
+            {
+                requestStarted = true;
+                response = await _fetch(home, options, (quotas, fetchedAt) =>
+                {
+                    quotaDate = fetchedAt;
+                    try { quotaReceived?.Invoke(UsageSnapshotMapper.Map(quotas, fetchedAt)); }
+                    catch { /* Observers cannot interrupt credential persistence. */ }
+                }, cancellationToken).ConfigureAwait(false);
+            }
             finally
             {
                 if (externalAuth is null)
                 {
                     // OAuth may rotate credentials before the quota request fails or is cancelled.
                     // Persist that rotation before deleting the isolated home, even after cancellation.
-                    var changedAuth = await File.ReadAllBytesAsync(Path.Combine(home, "auth.json"), CancellationToken.None).ConfigureAwait(false);
-                    if (!changedAuth.SequenceEqual(originalAuth))
+                    try
                     {
-                        if (!AuthBlob.Parse(originalAuth).IdentityMatches(AuthBlob.Parse(changedAuth)))
-                            throw new UsageException("Codex returned credentials for a different account.");
+                        var changedAuth = await File.ReadAllBytesAsync(Path.Combine(home, "auth.json"), CancellationToken.None).ConfigureAwait(false);
                         try
                         {
-                            _ = await _accounts.TryReplaceAuthAsync(profileId, originalAuth, changedAuth, CancellationToken.None).ConfigureAwait(false);
+                            if (!changedAuth.SequenceEqual(originalAuth))
+                            {
+                                if (!AuthBlob.Parse(originalAuth).IdentityMatches(AuthBlob.Parse(changedAuth)))
+                                    throw new UsageException("Codex returned credentials for a different account.");
+                                // A false CAS means a newer explicit login owns the encrypted store.
+                                _ = await _accounts.TryReplaceAuthAsync(profileId, originalAuth, changedAuth, CancellationToken.None).ConfigureAwait(false);
+                            }
                         }
-                        catch
-                        {
-                            // Keep a valid rotated token available for recovery if the encrypted store fails.
-                            keepHome = true;
-                            await File.WriteAllTextAsync(Path.Combine(home, "auth-recovery-required"), string.Empty, CancellationToken.None).ConfigureAwait(false);
-                            throw new UsageException($"无法保存已更新的登录凭据。隔离凭据保留于：{home}");
-                        }
+                        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(changedAuth); }
+                    }
+                    catch
+                    {
+                        lease.MarkRecoveryRequired();
+                        throw new UsageException($"无法保存或验证已更新的登录凭据。隔离凭据保留于：{home}");
                     }
                 }
+                // External auth contains only the desktop-owned access token; no rotation is owned here.
+                if (TemporaryDirectoryCleaner.HasCredentialFiles(home, ["auth.json", ExternalUsageAuth.FileName]))
+                {
+                    lease.MarkRecoveryRequired();
+                    throw new UsageException($"发现未完成写入的隔离凭据，已保留以供恢复：{home}");
+                }
+                safeToDelete = true;
+                lease.MarkCleanupReady();
             }
 
-            return UsageSnapshotMapper.Map(response, DateTimeOffset.UtcNow);
+            var snapshot = UsageSnapshotMapper.Map(response, response.QuotasFetchedAt ?? quotaDate ?? DateTimeOffset.UtcNow);
+            return snapshot.TokenUsage?.Snapshot is { } tokens
+                ? snapshot with { TokenUsage = snapshot.TokenUsage with { Snapshot = TokenUsageRetention.Normalize(tokens) } }
+                : snapshot;
         }
         finally
         {
+            if (originalAuth is not null) System.Security.Cryptography.CryptographicOperations.ZeroMemory(originalAuth);
+            if (!requestStarted)
+            {
+                // No CLI has owned this home, so no credential rotation can be pending.
+                lease.MarkCleanupReady();
+                safeToDelete = true;
+            }
+            // Release the lease before retrying deletion, but never declare uncertain credentials disposable.
+            lease.Dispose();
             try
             {
-                if (!keepHome) _ = await _cleaner.TryDeleteAsync(home, CancellationToken.None);
+                var hasCredentials = File.Exists(Path.Combine(home, "auth.json")) || File.Exists(Path.Combine(home, ExternalUsageAuth.FileName));
+                if (safeToDelete || !hasCredentials) _ = await _cleaner.TryDeleteAsync(home, CancellationToken.None);
             }
             catch
             {
@@ -133,7 +167,11 @@ public sealed class UsageFetcher
         {
             throw new UsageException("Unable to read current Codex credentials safely. Retry after Codex finishes updating its login.");
         }
-        if (!AuthBlob.Parse(storedAuth).IdentityMatches(AuthBlob.Parse(liveAuth))) return null;
-        return ExternalUsageAuth.FromAuth(liveAuth);
+        try
+        {
+            if (!AuthBlob.Parse(storedAuth).IdentityMatches(AuthBlob.Parse(liveAuth))) return null;
+            return ExternalUsageAuth.FromAuth(liveAuth);
+        }
+        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(liveAuth); }
     }
 }

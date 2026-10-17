@@ -35,6 +35,7 @@ public sealed class AccountSwitchServiceTests
         Assert.Equal(setup.Original, await setup.Accounts.LoadAuthAsync(first.Id, default));
         Assert.Equal(setup.Original, await File.ReadAllBytesAsync(result.LiveAuthBackupPath!));
         Assert.Equal(targetAuth, await File.ReadAllBytesAsync(setup.LivePath));
+        Assert.True(File.Exists(result.LiveAuthBackupPath + ".cleanup-ready"));
     }
 
     [Fact]
@@ -79,6 +80,20 @@ public sealed class AccountSwitchServiceTests
     }
 
     [Fact]
+    public async Task SwitchAsync_marker_failure_does_not_reverse_verified_success()
+    {
+        using var setup = new SwitchSetup();
+        var target = await setup.Accounts.SaveAsync("Target", TestAuth.OAuth("b", "s", "acct-target"), default);
+        setup.Files.BeforeWrite = (path, _) => { if (path.EndsWith(".cleanup-ready", StringComparison.Ordinal)) throw new IOException("marker failure"); };
+
+        var result = await setup.Service.SwitchAsync(target.Id, default);
+
+        Assert.Equal(target.Id, await setup.Accounts.GetActiveProfileIdAsync(default));
+        Assert.True(File.Exists(result.LiveAuthBackupPath));
+        Assert.False(File.Exists(result.LiveAuthBackupPath + ".cleanup-ready"));
+    }
+
+    [Fact]
     public async Task SwitchAsync_cancellation_after_live_write_still_restores_auth_and_metadata()
     {
         using var setup = new SwitchSetup();
@@ -111,6 +126,7 @@ public sealed class AccountSwitchServiceTests
 
         Assert.Equal(AccountSwitchStage.Validation, error.Stage);
         Assert.Equal(setup.Original, await File.ReadAllBytesAsync(setup.LivePath));
+        Assert.Empty(Directory.GetFiles(setup.BackupPath, "*.cleanup-ready"));
     }
 
     [Fact]

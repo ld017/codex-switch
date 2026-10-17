@@ -20,11 +20,14 @@ public sealed class BackupManager
 
     public string CreateBackup(string sourcePath)
     {
+        if (!MaintenancePaths.IsSafe(_backupDirectory, _backupDirectory)) throw new IOException("Unsafe provider backup directory.");
         Directory.CreateDirectory(_backupDirectory);
         var stamp = _utcNow().UtcDateTime.ToString("yyyyMMdd-HHmmss-fffffff", System.Globalization.CultureInfo.InvariantCulture);
         var destination = Path.Combine(_backupDirectory, $"config-{stamp}.toml");
         File.Copy(sourcePath, destination, overwrite: false);
-        Prune();
+        try { Prune(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        { /* The completed byte backup remains valid even when old-file cleanup is unavailable. */ }
         return destination;
     }
 
@@ -32,11 +35,13 @@ public sealed class BackupManager
     {
         var stale = new DirectoryInfo(_backupDirectory)
             .EnumerateFiles("config-*.toml", SearchOption.TopDirectoryOnly)
+            .Where(file => MaintenancePaths.IsProviderBackup(file.Name) && MaintenancePaths.IsSafe(_backupDirectory, file.FullName))
             .OrderByDescending(file => file.Name, StringComparer.Ordinal)
             .Skip(_retentionLimit);
         foreach (var file in stale)
         {
-            file.Delete();
+            try { file.Delete(); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { /* Retry on the next successful backup. */ }
         }
     }
 }

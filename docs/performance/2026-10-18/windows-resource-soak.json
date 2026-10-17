@@ -1,0 +1,70 @@
+{
+  "scenario": "Synthetic Core refresh, 5 accounts, 100 automatic rounds; no real CLI or credentials",
+  "quotaReads": 500,
+  "tokenReads": 5,
+  "peakConcurrentQueries": 2,
+  "elapsedMilliseconds": 10115,
+  "samples": [
+    {
+      "round": 10,
+      "privateBytes": 28839936,
+      "workingSetBytes": 78049280,
+      "handles": 407
+    },
+    {
+      "round": 20,
+      "privateBytes": 29327360,
+      "workingSetBytes": 79585280,
+      "handles": 392
+    },
+    {
+      "round": 30,
+      "privateBytes": 30236672,
+      "workingSetBytes": 81321984,
+      "handles": 402
+    },
+    {
+      "round": 40,
+      "privateBytes": 30932992,
+      "workingSetBytes": 83156992,
+      "handles": 412
+    },
+    {
+      "round": 50,
+      "privateBytes": 30937088,
+      "workingSetBytes": 83206144,
+      "handles": 401
+    },
+    {
+      "round": 60,
+      "privateBytes": 30937088,
+      "workingSetBytes": 83218432,
+      "handles": 411
+    },
+    {
+      "round": 70,
+      "privateBytes": 29405184,
+      "workingSetBytes": 81489920,
+      "handles": 399
+    },
+    {
+      "round": 80,
+      "privateBytes": 28766208,
+      "workingSetBytes": 81145856,
+      "handles": 409
+    },
+    {
+      "round": 90,
+      "privateBytes": 28725248,
+      "workingSetBytes": 81149952,
+      "handles": 397
+    },
+    {
+      "round": 100,
+      "privateBytes": 28725248,
+      "workingSetBytes": 81149952,
+      "handles": 407
+    }
+  ],
+  "limitation": "Memory samples belong to the .NET test host, not the installed WinForms app; no before/after claim."
+}

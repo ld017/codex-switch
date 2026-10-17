@@ -6,6 +6,50 @@ namespace CodexSwitch.IntegrationTests.Usage;
 public sealed class CodexRpcClientTests
 {
     [Fact]
+    public async Task FetchUsageAsync_publishes_quota_before_optional_token_timeout_and_preserves_read_timestamp()
+    {
+        await using var client = CreateClient("token-timeout", TimeSpan.FromSeconds(1));
+        await client.InitializeAsync("Test", "1.0", default);
+        var quotaReceived = new TaskCompletionSource<DateTimeOffset>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var refresh = client.FetchUsageAsync(default, quotaReceived: (_, at) => quotaReceived.TrySetResult(at));
+        var quotaDate = await quotaReceived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(refresh.IsCompleted);
+        var response = await refresh;
+
+        Assert.Equal(quotaDate, response.QuotasFetchedAt);
+        Assert.Equal(TokenUsageStatus.Error, response.TokenUsage!.Status);
+    }
+
+    [Fact]
+    public async Task FetchUsageAsync_can_skip_tokens_and_observer_failure_does_not_fail_quota_read()
+    {
+        await using var client = CreateClient("token-timeout", TimeSpan.FromSeconds(5));
+        await client.InitializeAsync("Test", "1.0", default);
+
+        var response = await client.FetchUsageAsync(default, includeTokens: false,
+            quotaReceived: (_, _) => throw new InvalidOperationException("Broken observer"));
+
+        Assert.Equal(25, response.RateLimits!.Primary!.UsedPercent);
+        Assert.NotNull(response.QuotasFetchedAt);
+        Assert.Null(response.TokenUsage);
+    }
+
+    [Theory]
+    [InlineData("oversized-line")]
+    [InlineData("oversized-unterminated")]
+    public async Task FetchRateLimitsAsync_rejects_oversized_stdout_without_echoing_it(string mode)
+    {
+        await using var client = CreateClient(mode);
+        await client.InitializeAsync("Test", "1.0", default);
+
+        var error = await Assert.ThrowsAsync<CodexRpcException>(() => client.FetchRateLimitsAsync(default));
+
+        Assert.Contains("limit", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("synthetic-payload-secret", error.Message);
+    }
+
+    [Fact]
     public async Task FetchUsageAsync_reads_server_token_totals_and_daily_buckets_after_quotas()
     {
         await using var client = CreateClient("success");

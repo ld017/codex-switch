@@ -8,7 +8,8 @@ using CodexSwitch.Core.Usage;
 namespace CodexSwitch.App;
 
 public sealed record AppServices(AppPaths Paths, AccountStore Accounts, LoginService Login, AccountSwitchService AccountSwitch,
-    ProviderSwitchService ProviderSwitch, UsageRefreshCoordinator Usage, ICodexLifecycle Lifecycle, Sub2ApiProbe Sub2Api, StartupRegistration Startup);
+    ProviderSwitchService ProviderSwitch, UsageRefreshCoordinator Usage, ICodexLifecycle Lifecycle, Sub2ApiProbe Sub2Api, StartupRegistration Startup,
+    DataMaintenanceService? Maintenance = null);
 
 public static class CompositionRoot
 {
@@ -18,6 +19,7 @@ public static class CompositionRoot
             .ToDictionary(entry => (string)entry.Key, entry => entry.Value?.ToString(), StringComparer.OrdinalIgnoreCase);
         var paths = new AppPaths(environment);
         AppDataSecurity.EnsurePrivateDirectory(paths.DataHome);
+        AppDataSecurity.EnsurePrivateDirectory(paths.AccountBackupDirectory);
         Directory.CreateDirectory(paths.LogDirectory);
         var files = new AtomicFileStore();
         var accounts = new AccountStore(paths.DataHome, new DpapiCredentialProtector(), files);
@@ -27,14 +29,16 @@ public static class CompositionRoot
         var login = new LoginService(cli, paths.TemporaryRoot, runner, new AccountImportService(accounts));
         var accountSwitch = new AccountSwitchService(paths.ConfigPath, paths.AuthPath, paths.AccountBackupDirectory, accounts, files);
         var providerSwitch = new ProviderSwitchService(paths.ConfigPath, cli, files, new BackupManager(paths.ProviderBackupDirectory, 10), runner);
-        var fetcher = new UsageFetcher(accounts, paths.ConfigPath, paths.TemporaryRoot, async (home, token) =>
+        var fetcher = new UsageFetcher(accounts, paths.ConfigPath, paths.TemporaryRoot, async (home, options, quotaReceived, token) =>
         {
             await using var rpc = new CodexRpcClient(ResolveCli(), new Dictionary<string, string?> { ["CODEX_HOME"] = home });
             await rpc.InitializeAsync("CodexSwitchWindows", Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0", token);
             await rpc.UseExternalAuthFromHomeAsync(home, token);
-            return await rpc.FetchUsageAsync(token);
+            return await rpc.FetchUsageAsync(token, options.IncludeTokens, quotaReceived);
         }, liveAuthPath: paths.AuthPath);
         var usage = new UsageRefreshCoordinator(accounts, fetcher, new UsageCache(paths.UsageCachePath, files));
-        return new AppServices(paths, accounts, login, accountSwitch, providerSwitch, usage, new WindowsCodexLifecycle(), new Sub2ApiProbe(), new StartupRegistration("CodexSwitch", Environment.ProcessPath!));
+        return new AppServices(paths, accounts, login, accountSwitch, providerSwitch, usage, new WindowsCodexLifecycle(), new Sub2ApiProbe(),
+            new StartupRegistration("CodexSwitch", Environment.ProcessPath!),
+            new DataMaintenanceService(paths.TemporaryRoot, paths.LogDirectory, paths.AccountBackupDirectory));
     }
 }
