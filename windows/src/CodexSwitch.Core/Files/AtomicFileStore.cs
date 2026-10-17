@@ -6,6 +6,17 @@ public sealed class AtomicFileStore : IAtomicFileStore
 
     public byte[] ReadAllBytes(string path) => File.ReadAllBytes(path);
 
+    public byte[] ReadBounded(string path, int maximumBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumBytes);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        if (stream.Length > maximumBytes) throw new InvalidDataException("File exceeds the permitted size.");
+        var bytes = new byte[(int)stream.Length];
+        stream.ReadExactly(bytes);
+        if (stream.ReadByte() != -1) throw new InvalidDataException("File grew beyond the permitted size.");
+        return bytes;
+    }
+
     public void WriteAtomically(string path, byte[] contents)
     {
         ArgumentNullException.ThrowIfNull(contents);

@@ -13,9 +13,10 @@ public sealed class UsageRefreshCoordinator
     private readonly TimeSpan _accountTimeout;
     private readonly object _refreshGate = new();
     private Task<IReadOnlyDictionary<Guid, UsageState>>? _inFlight;
+    private static readonly TimeSpan TokenRefreshInterval = TimeSpan.FromMinutes(5);
 
     public UsageRefreshCoordinator(AccountStore accounts, UsageFetcher fetcher, UsageCache cache,
-        int maximumConcurrency = 3, TimeSpan? accountTimeout = null)
+        int maximumConcurrency = 2, TimeSpan? accountTimeout = null)
     {
         if (maximumConcurrency < 1) throw new ArgumentOutOfRangeException(nameof(maximumConcurrency));
         _accounts = accounts;
@@ -30,7 +31,7 @@ public sealed class UsageRefreshCoordinator
         => _cache.LoadAsync(cancellationToken);
 
     public Task<IReadOnlyDictionary<Guid, UsageState>> RefreshAllAsync(CancellationToken cancellationToken,
-        Action<Guid, UsageState>? progress = null)
+        Action<Guid, UsageState>? progress = null, bool forceTokens = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_refreshGate)
@@ -38,68 +39,117 @@ public sealed class UsageRefreshCoordinator
             // Repeated refresh clicks share the same work, including cancellation cleanup.
             // Run process startup and synchronous cache I/O away from the UI thread.
             if (_inFlight is null || _inFlight.IsCompleted)
-                _inFlight = Task.Run(() => RefreshCoreAsync(cancellationToken, progress), CancellationToken.None);
+                _inFlight = Task.Run(() => RefreshCoreAsync(cancellationToken, progress, forceTokens), CancellationToken.None);
             return _inFlight;
         }
     }
 
     private async Task<IReadOnlyDictionary<Guid, UsageState>> RefreshCoreAsync(CancellationToken cancellationToken,
-        Action<Guid, UsageState>? progress)
+        Action<Guid, UsageState>? progress, bool forceTokens)
     {
         var profiles = await _accounts.ListAsync(cancellationToken).ConfigureAwait(false);
+        var activeId = await _accounts.GetActiveProfileIdAsync(cancellationToken).ConfigureAwait(false);
         var profileIds = profiles.Select(profile => profile.Id).ToHashSet();
         var cached = await _cache.LoadAsync(cancellationToken).ConfigureAwait(false);
         var states = new ConcurrentDictionary<Guid, UsageState>(cached.Where(pair => profileIds.Contains(pair.Key)));
-        using var cacheGate = new SemaphoreSlim(1, 1);
+        var cacheGate = new object();
+
+        void Notify(Guid id, UsageState state)
+        {
+            // A UI or diagnostics observer must not prevent fetching, caching, or credential cleanup.
+            try { progress?.Invoke(id, state); }
+            catch { }
+        }
+
+        void Publish(Guid id, UsageState state)
+        {
+            lock (cacheGate)
+            {
+                states[id] = state;
+                // UsageCache uses atomic synchronous I/O. Complete the checkpoint before
+                // the fetcher proceeds to the optional endpoint or acknowledges cancellation.
+                _cache.SaveAsync(new Dictionary<Guid, UsageState>(states), CancellationToken.None).GetAwaiter().GetResult();
+            }
+            Notify(id, state);
+        }
+
         try
         {
-            await Parallel.ForEachAsync(profiles,
+            await Parallel.ForEachAsync(profiles.OrderByDescending(profile => profile.Id == activeId),
                 new ParallelOptions { MaxDegreeOfParallelism = _maximumConcurrency, CancellationToken = cancellationToken },
                 async (profile, token) =>
                 {
                     var previous = states.GetValueOrDefault(profile.Id)?.Snapshot;
-                    progress?.Invoke(profile.Id, UsageState.Refreshing(previous));
+                    Notify(profile.Id, UsageState.Refreshing(previous));
+                    var includeTokens = forceTokens || TokensDue(previous, DateTimeOffset.UtcNow);
+                    UsageSnapshot? receivedQuota = null;
+                    DateTimeOffset? tokenAttemptedAt = null;
+
+                    UsageSnapshot Merge(UsageSnapshot snapshot)
+                    {
+                        if (includeTokens) tokenAttemptedAt ??= DateTimeOffset.UtcNow;
+                        return PreserveTokenCache(snapshot, previous, includeTokens) with
+                        {
+                            TokenAttemptedAt = tokenAttemptedAt ?? previous?.TokenAttemptedAt,
+                        };
+                    }
+
+                    UsageSnapshot WithTokenFailure(UsageSnapshot snapshot, string message)
+                        => includeTokens
+                            ? snapshot with { TokenUsage = TokenUsageState.Failed(message, snapshot.TokenUsage?.Snapshot) }
+                            : snapshot;
+
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
                     timeout.CancelAfter(_accountTimeout);
                     UsageState state;
                     try
                     {
-                        var snapshot = await _fetcher.FetchAsync(profile.Id, timeout.Token).ConfigureAwait(false);
-                        state = UsageState.Available(PreserveTokenCache(snapshot, previous));
+                        var snapshot = await _fetcher.FetchAsync(profile.Id, timeout.Token, new UsageFetchOptions(includeTokens), quota =>
+                        {
+                            receivedQuota = Merge(quota);
+                            Publish(profile.Id, UsageState.Available(receivedQuota));
+                        }).ConfigureAwait(false);
+                        state = UsageState.Available(Merge(snapshot));
                     }
-                    catch (PartialUsageCancellationException partial) when (!cancellationToken.IsCancellationRequested)
+                    catch (PartialUsageCancellationException partial)
                     {
                         // This account's deadline expired during the optional read. The quota
                         // already succeeded, so report it and retain token data independently.
-                        // User cancellation remains cancellation, even after a quota response.
-                        cancellationToken.ThrowIfCancellationRequested();
+                        // User cancellation remains cancellation, but must retain a received quota.
                         try
                         {
-                            var snapshot = UsageSnapshotMapper.Map(partial.Quotas, partial.QuotasFetchedAt) with
-                            {
-                                TokenUsage = TokenUsageState.Failed("Token 用量刷新超时，已保留额度。"),
-                            };
-                            state = UsageState.Available(PreserveTokenCache(snapshot, previous));
+                            receivedQuota ??= Merge(UsageSnapshotMapper.Map(partial.Quotas, partial.QuotasFetchedAt));
+                            state = UsageState.Available(WithTokenFailure(receivedQuota,
+                                cancellationToken.IsCancellationRequested ? "Token 用量刷新已取消，已保留额度。" : "Token 用量刷新超时，已保留额度。"));
                         }
                         catch (Exception error) when (error is not OperationCanceledException)
                         {
-                            state = Failure(error, previous);
+                            state = Failure(error, receivedQuota ?? previous);
+                        }
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            Publish(profile.Id, state);
+                            cancellationToken.ThrowIfCancellationRequested();
                         }
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
-                        state = UsageState.Failed($"刷新额度超时（{_accountTimeout.TotalSeconds:0.#} 秒），请重试。", previous);
+                        state = receivedQuota is null
+                            ? UsageState.Failed($"刷新额度超时（{_accountTimeout.TotalSeconds:0.#} 秒），请重试。", previous)
+                            : UsageState.Available(WithTokenFailure(receivedQuota, "Token 用量刷新超时，已保留额度。"));
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        if (receivedQuota is not null)
+                            Publish(profile.Id, UsageState.Available(WithTokenFailure(receivedQuota, "Token 用量刷新已取消，已保留额度。")));
+                        throw;
                     }
                     catch (Exception error) when (error is not OperationCanceledException)
                     {
-                        state = Failure(error, previous);
+                        state = Failure(error, receivedQuota ?? previous);
                     }
 
-                    states[profile.Id] = state;
-                    progress?.Invoke(profile.Id, state);
-                    await cacheGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-                    try { await _cache.SaveAsync(new Dictionary<Guid, UsageState>(states), CancellationToken.None).ConfigureAwait(false); }
-                    finally { cacheGate.Release(); }
+                    Publish(profile.Id, state);
                 }).ConfigureAwait(false);
         }
         finally
@@ -110,8 +160,16 @@ public sealed class UsageRefreshCoordinator
         return new Dictionary<Guid, UsageState>(states);
     }
 
-    private static UsageSnapshot PreserveTokenCache(UsageSnapshot snapshot, UsageSnapshot? previous)
+    private static bool TokensDue(UsageSnapshot? previous, DateTimeOffset now)
     {
+        var attempted = previous?.TokenAttemptedAt ?? previous?.TokenUsage?.Snapshot?.FetchedAt;
+        return attempted is null || attempted > now || now - attempted >= TokenRefreshInterval;
+    }
+
+    private static UsageSnapshot PreserveTokenCache(UsageSnapshot snapshot, UsageSnapshot? previous, bool includeTokens)
+    {
+        if (!includeTokens || snapshot.TokenUsage is null)
+            return snapshot with { TokenUsage = previous?.TokenUsage };
         if (snapshot.TokenUsage is { Status: TokenUsageStatus.Error, Snapshot: null } failedTokens
             && previous?.TokenUsage?.Snapshot is { } previousTokens)
         {

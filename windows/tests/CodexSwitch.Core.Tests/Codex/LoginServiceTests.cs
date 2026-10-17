@@ -110,7 +110,74 @@ public sealed class LoginServiceTests
         Assert.Equal("Updated", profile.Label);
     }
 
-    private sealed class LoginProcessRunner(byte[]? auth, int exitCode = 0, string standardError = "") : IProcessRunner
+    [Fact]
+    public async Task LoginAsync_holds_lease_and_plaintext_until_import_completes_then_retains_failed_import_for_recovery()
+    {
+        using var directory = new TestDirectory();
+        var runner = new LoginProcessRunner(TestAuth.OAuth("access", "refresh", "acct-1"));
+        var protector = new ImportFailureProtector(() =>
+        {
+            Assert.True(File.Exists(Path.Combine(runner.CodexHome, "auth.json")));
+            Assert.True(TemporaryHomeLease.IsActive(runner.CodexHome));
+        });
+        var store = new AccountStore(directory.File("data"), protector, new AtomicFileStore());
+        var service = new LoginService("codex.exe", directory.File("tmp"), runner, new AccountImportService(store));
+
+        await Assert.ThrowsAsync<IOException>(() => service.LoginAsync("Work", false, default));
+
+        Assert.True(Directory.Exists(runner.CodexHome));
+        Assert.True(TemporaryHomeLease.HasRecoveryRequired(runner.CodexHome));
+        Assert.False(TemporaryHomeLease.IsActive(runner.CodexHome));
+    }
+
+    [Fact]
+    public async Task LoginAsync_cleanup_failure_does_not_reverse_successful_import()
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.File("data"), new AccountImportServiceTests.PassthroughProtector(), new AtomicFileStore());
+        var runner = new LoginProcessRunner(TestAuth.OAuth("access", "refresh", "acct-1"));
+        var service = new LoginService("codex.exe", directory.File("tmp"), runner, new AccountImportService(store), new ThrowingCleaner());
+
+        var profile = await service.LoginAsync("Work", false, default);
+
+        Assert.Equal("Work", profile.Label);
+        Assert.True(TemporaryHomeLease.IsCleanupReady(runner.CodexHome));
+        Assert.False(TemporaryHomeLease.IsActive(runner.CodexHome));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LoginAsync_retains_interrupted_atomic_credentials_after_cli_failure(bool throwsAfterWrite)
+    {
+        using var directory = new TestDirectory();
+        var store = new AccountStore(directory.File("data"), new AccountImportServiceTests.PassthroughProtector(), new AtomicFileStore());
+        var runner = new LoginProcessRunner(TestAuth.OAuth("access", "refresh", "acct-1"), exitCode: 1,
+            writeAtomicOnly: true, throwAfterWrite: throwsAfterWrite);
+        var service = new LoginService("codex.exe", directory.File("tmp"), runner, new AccountImportService(store));
+
+        if (throwsAfterWrite) await Assert.ThrowsAsync<IOException>(() => service.LoginAsync("Work", false, default));
+        else await Assert.ThrowsAsync<LoginException>(() => service.LoginAsync("Work", false, default));
+
+        Assert.True(Directory.Exists(runner.CodexHome));
+        Assert.Single(Directory.GetFiles(runner.CodexHome, ".auth.json.*.tmp"));
+        Assert.True(TemporaryHomeLease.HasRecoveryRequired(runner.CodexHome));
+        Assert.False(TemporaryHomeLease.IsCleanupReady(runner.CodexHome));
+    }
+
+    private sealed class ImportFailureProtector(Action inspect) : ICredentialProtector
+    {
+        public byte[] Protect(ReadOnlySpan<byte> plaintext) { inspect(); throw new IOException("store failure"); }
+        public byte[] Unprotect(ReadOnlySpan<byte> ciphertext) => ciphertext.ToArray();
+    }
+
+    private sealed class ThrowingCleaner : CodexSwitch.Core.Usage.ITemporaryDirectoryCleaner
+    {
+        public Task<bool> TryDeleteAsync(string path, CancellationToken cancellationToken) => throw new IOException("cleanup failure");
+        public Task CleanStaleAsync(string root, TimeSpan minimumAge, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class LoginProcessRunner(byte[]? auth, int exitCode = 0, string standardError = "", bool writeAtomicOnly = false, bool throwAfterWrite = false) : IProcessRunner
     {
         public bool WasVisible { get; private set; }
         public IReadOnlyList<string> Arguments { get; private set; } = [];
@@ -130,8 +197,10 @@ public sealed class LoginServiceTests
             if (auth is not null)
             {
                 Directory.CreateDirectory(CodexHome);
-                await File.WriteAllBytesAsync(Path.Combine(CodexHome, "auth.json"), auth, cancellationToken);
+                await File.WriteAllBytesAsync(Path.Combine(CodexHome, writeAtomicOnly ? $".auth.json.{Guid.NewGuid():N}.tmp" : "auth.json"), auth, cancellationToken);
             }
+
+            if (throwAfterWrite) throw new IOException("synthetic interrupted atomic write");
 
             return new ProcessResult(exitCode, string.Empty, standardError);
         }

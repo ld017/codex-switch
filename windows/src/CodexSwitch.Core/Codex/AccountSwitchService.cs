@@ -132,6 +132,8 @@ public sealed class AccountSwitchService
 
             stage = AccountSwitchStage.Metadata;
             await _accounts.SetActiveProfileIdAsync(profileId, cancellationToken);
+            if (await _accounts.GetActiveProfileIdAsync(cancellationToken) != profileId)
+                throw new InvalidDataException("The new active account was not saved.");
         }
         catch (Exception error)
         {
@@ -171,6 +173,11 @@ public sealed class AccountSwitchService
             throw new AccountSwitchException(stage, "无法安全切换 OpenAI 账号。", error);
         }
 
+        if (backupPath is not null)
+        {
+            try { _files.WriteAtomically(backupPath + ".cleanup-ready", []); }
+            catch { /* An unmarked backup stays protected; cleanup failure does not undo a verified switch. */ }
+        }
         return new AccountSwitchResult(previousActive, profileId, backupPath);
     }
 

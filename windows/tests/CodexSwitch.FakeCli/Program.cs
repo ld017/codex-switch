@@ -9,6 +9,11 @@ public static class Program
     public static async Task Main()
     {
         var mode = Environment.GetEnvironmentVariable("FAKE_CODEX_MODE") ?? "success";
+        if (mode == "environment-probe")
+        {
+            Environment.ExitCode = Environment.GetEnvironmentVariable("CODEX_SWITCH_TEST_VALUE") == "works" ? 0 : 9;
+            return;
+        }
         while (await Console.In.ReadLineAsync() is { } line)
         {
             using var document = JsonDocument.Parse(line);
@@ -60,9 +65,22 @@ public static class Program
             {
                 Console.WriteLine(JsonSerializer.Serialize(new { jsonrpc = "2.0", id = id.GetInt32(), error = new { message = "{\"access_token\":\"secret-access\"}" } }));
             }
+            else if (mode is "oversized-line" or "oversized-unterminated")
+            {
+                Console.Write("synthetic-payload-secret");
+                for (var index = 0; index < 257; index++) Console.Write(new string('x', 4096));
+                if (mode == "oversized-line") Console.WriteLine();
+                await Console.Out.FlushAsync();
+                if (mode == "oversized-unterminated") await Task.Delay(Timeout.InfiniteTimeSpan);
+            }
             else if (method == "account/usage/read")
             {
-                if (mode == "token-timeout") await Task.Delay(Timeout.InfiniteTimeSpan);
+                if (mode == "token-timeout")
+                {
+                    var tokenRequestFile = Environment.GetEnvironmentVariable("FAKE_CODEX_TOKEN_REQUEST_FILE");
+                    if (!string.IsNullOrEmpty(tokenRequestFile)) await File.WriteAllTextAsync(tokenRequestFile, string.Empty);
+                    await Task.Delay(Timeout.InfiniteTimeSpan);
+                }
                 if (mode == "token-unsupported")
                     Console.WriteLine(JsonSerializer.Serialize(new { id = id.GetInt32(), error = new { message = "unsupported method account/usage/read" } }));
                 else if (mode == "token-error-secret")

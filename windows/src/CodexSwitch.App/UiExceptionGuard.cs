@@ -1,4 +1,5 @@
 using CodexSwitch.Core.Diagnostics;
+using CodexSwitch.Core.Files;
 
 namespace CodexSwitch.App;
 
@@ -6,7 +7,6 @@ internal static class UiExceptionGuard
 {
     private static int _handling;
     private static int _installed;
-    private static readonly object LogGate = new();
 
     public static void Install()
     {
@@ -53,17 +53,7 @@ internal static class UiExceptionGuard
 
     public static bool TryAppendText(string directory, string title, string detail, string fileName = "codex-switch.log")
     {
-        try
-        {
-            lock (LogGate)
-            {
-                Directory.CreateDirectory(directory);
-                File.AppendAllText(Path.Combine(directory, fileName),
-                    $"{DateTimeOffset.Now:O} {title}: {SecretRedactor.Redact(detail)}{Environment.NewLine}");
-            }
-            return true;
-        }
-        catch { return false; }
+        return RotatingLogWriter.TryAppend(directory, title, detail, fileName);
     }
 
     public static void RecordSession(string eventName)

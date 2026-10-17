@@ -18,10 +18,10 @@ jobs:
         run: dotnet test windows/CodexSwitch.sln -c Release
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
-      - name: Build installer
+      - name: Build release packages
         shell: powershell
-        run: windows/scripts/build-installer.ps1 -SkipTests
+        run: windows/scripts/package-release.ps1 -SkipTests
       - uses: actions/upload-artifact@v4
         with:
           name: CodexSwitch-Windows-x64
-          path: artifacts/installer/CodexSwitch-Setup-x64.exe
+          path: artifacts/release/windows-v*/*

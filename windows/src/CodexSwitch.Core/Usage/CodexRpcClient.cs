@@ -13,6 +13,7 @@ public sealed class CodexRpcException : Exception
 public sealed class CodexRpcClient : IAsyncDisposable
 {
     private readonly Process _process;
+    private readonly BoundedLineReader _stdout;
     private readonly TimeSpan _timeout;
     private readonly SemaphoreSlim _requestGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
@@ -45,6 +46,7 @@ public sealed class CodexRpcClient : IAsyncDisposable
         start.Environment.Remove("OPENAI_API_KEY");
         start.Environment.Remove("CODEX_API_KEY");
         _process = Process.Start(start) ?? throw new CodexRpcException("Failed to start Codex CLI.");
+        _stdout = new BoundedLineReader(_process.StandardOutput);
         _stderrTask = DrainStandardErrorAsync();
     }
 
@@ -104,15 +106,25 @@ public sealed class CodexRpcClient : IAsyncDisposable
                 .Select(day => new TokenUsageDailyBucket(day!.StartDate!, day.Tokens!.Value)).ToArray();
             if (summary?.LifetimeTokens is null && summary?.PeakDailyTokens is null && days is not { Length: > 0 })
                 throw new CodexRpcException("Codex 服务未返回 Token 用量，暂时无法获取。");
-            return new TokenUsageSnapshot(summary, days, DateTimeOffset.UtcNow);
+            return TokenUsageRetention.Normalize(new TokenUsageSnapshot(summary, days, DateTimeOffset.UtcNow));
         }
         catch (JsonException error) { throw new CodexRpcException("Malformed token usage response: " + error.Message); }
     }
 
-    public async Task<RateLimitsResponse> FetchUsageAsync(CancellationToken cancellationToken)
+    public async Task<RateLimitsResponse> FetchUsageAsync(CancellationToken cancellationToken, bool includeTokens = true,
+        Action<RateLimitsResponse, DateTimeOffset>? quotaReceived = null)
     {
         var quotas = await FetchRateLimitsAsync(cancellationToken).ConfigureAwait(false);
         var quotasFetchedAt = DateTimeOffset.UtcNow;
+        quotas = quotas with { QuotasFetchedAt = quotasFetchedAt };
+        // Observers cannot prevent optional reads, credential persistence, or process cleanup.
+        try { quotaReceived?.Invoke(quotas, quotasFetchedAt); }
+        catch { }
+        if (!includeTokens)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return quotas;
+        }
         TokenUsageState tokens;
         try { tokens = TokenUsageState.Available(await FetchTokenUsageAsync(cancellationToken).ConfigureAwait(false)); }
         catch (OperationCanceledException error)
@@ -148,7 +160,7 @@ public sealed class CodexRpcClient : IAsyncDisposable
             await SendAsync(new { jsonrpc = "2.0", id, method, @params = parameters }, timeout.Token).ConfigureAwait(false);
             while (true)
             {
-                var line = await _process.StandardOutput.ReadLineAsync(timeout.Token).ConfigureAwait(false);
+                var line = await _stdout.ReadLineAsync(timeout.Token).ConfigureAwait(false);
                 if (line is null)
                 {
                     try { await _stderrTask.WaitAsync(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false); }

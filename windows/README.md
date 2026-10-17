@@ -4,7 +4,19 @@ Windows 10/11 x64 原生桌面面板版，提供 Provider 切换、多个 OpenAI
 
 ## 安装
 
-从 [Windows 1.0.6 Release](https://github.com/ld017/codex-switch/releases/tag/windows-v1.0.6) 下载 `CodexSwitch-Setup-1.0.6-x64.exe` 并安装，或解压免安装 ZIP 后运行 `CodexSwitch.exe`。安装程序按当前用户安装到 `%LOCALAPPDATA%\Programs\Codex Switch`，创建开始菜单快捷方式，并可选登录 Windows 时自动启动。程序自带 .NET 8 运行时。Release 同时提供 `SHA256SUMS.txt` 用于核对下载文件。
+从 [Windows 1.0.7 Release](https://github.com/ld017/codex-switch/releases/tag/windows-v1.0.7) 下载 `CodexSwitch-Setup-1.0.7-x64.exe` 并安装，或解压免安装 ZIP 后运行 `CodexSwitch.exe`。安装程序按当前用户安装到 `%LOCALAPPDATA%\Programs\Codex Switch`，创建开始菜单快捷方式，并可选登录 Windows 时自动启动。程序自带 .NET 8 运行时。Release 同时提供 `SHA256SUMS.txt` 用于核对下载文件。
+
+## 1.0.7：刷新、内存与数据维护
+
+- 额度取得后立即更新，不等待可选 Token 统计；当前账号优先，查询并发最多 2 个。
+- 自动额度刷新前台 1 分钟、最小化 5 分钟；Token 自动读取间隔 5 分钟。手动刷新可强刷，进行中重复点击最多补一轮。
+- 切号/登录后先显示本地结果，再发起刷新；网络或服务延迟仍可能造成读取失败，旧值保留原读取时间。
+- Token 日记录去重后保留最近 366 个有效日期，服务累计数不重算；缓存文件最大 8 MiB，损坏/超限时重新获取，不影响账号库。
+- 日志每类最多当前文件及 3 个归档、各 2 MiB；后台启动及每 6 小时进行维护，旧归档超过 14 天清理。
+- 临时目录在凭据安全保存后立即清理；持有活动租约、恢复标记或状态未知的凭据目录不因年龄删除。满 1 小时的明确可回收目录由维护重试。
+- 成功切号备份保留最近 10 份、超过 30 天可清理但保留最新一份；未标记旧备份与恢复备份保留。恢复资料不受硬配额限制，维护结果记录需要处理的数量。
+
+[总体架构](../docs/architecture/windows-refresh-and-resources.md)与[实施计划](../docs/architecture/windows-refresh-resource-plan.md)记录了数据分类、删除边界和验证方法。
 
 需要先安装官方 Codex Windows 应用。程序会从 `CODEX_CLI`、`PATH` 或 `%LOCALAPPDATA%\OpenAI\Codex\bin\*\codex.exe` 定位 CLI。
 

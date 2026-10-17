@@ -56,7 +56,7 @@ public sealed class TokenUsageDetailsForm : Form
         var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = new Padding(0, 10, 0, 0) };
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
-        footer.Controls.Add(new Label { Text = "本月仅汇总已返回记录；缺失记录不视为零。", Dock = DockStyle.Fill, ForeColor = AppTheme.Muted, Font = AppTheme.Font(8.5f), TextAlign = ContentAlignment.MiddleLeft });
+        footer.Controls.Add(new Label { Text = "仅保留最近 366 个有效日期；本月仅汇总已返回记录，缺失不视为零。", Dock = DockStyle.Fill, ForeColor = AppTheme.Muted, Font = AppTheme.Font(8.5f), TextAlign = ContentAlignment.MiddleLeft });
         var close = new DashboardButton { Text = "关闭", Dock = DockStyle.Fill, DialogResult = DialogResult.OK };
         footer.Controls.Add(close, 1, 0);
         root.Controls.Add(footer, 0, 5);
@@ -97,7 +97,8 @@ public sealed class TokenUsageDetailsForm : Form
             .Where(day => day.Date.HasValue && day.Date.Value <= today)
             .GroupBy(day => day.Date!.Value)
             .Select(group => (Date: group.Key, Tokens: group.Max(day => day.Tokens)))
-            .OrderByDescending(day => day.Date);
+            .OrderByDescending(day => day.Date)
+            .Take(366);
         foreach (var day in valid)
         {
             var value = day.Tokens is > 0 and < 5000 ? "<0.01" : (day.Tokens / 1_000_000m).ToString("0.00", CultureInfo.InvariantCulture);

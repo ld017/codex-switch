@@ -14,6 +14,8 @@ public sealed record RateLimitsResponse(RateLimitsSnapshot? RateLimits, ResetCre
     // Populated only by the combined client read; this is not part of the quota RPC payload.
     [JsonIgnore]
     public TokenUsageState? TokenUsage { get; init; }
+    [JsonIgnore]
+    public DateTimeOffset? QuotasFetchedAt { get; init; }
 }
 
 public sealed record UsageSnapshot(
@@ -33,6 +35,9 @@ public sealed record UsageSnapshot(
     bool? CreditsUnlimited = null,
     TokenUsageState? TokenUsage = null)
 {
+    // A failed optional endpoint also starts the cooldown; keep this with the bounded profile cache.
+    public DateTimeOffset? TokenAttemptedAt { get; init; }
+
     // Persist usage, as returned by app-server; derive remaining quota only for display.
     // This also keeps older usage-cache files compatible with the corrected UI.
     [JsonIgnore]

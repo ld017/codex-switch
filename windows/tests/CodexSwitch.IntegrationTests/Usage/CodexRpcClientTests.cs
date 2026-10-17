@@ -6,6 +6,62 @@ namespace CodexSwitch.IntegrationTests.Usage;
 public sealed class CodexRpcClientTests
 {
     [Fact]
+    public async Task FetchUsageAsync_publishes_quota_before_optional_token_timeout_and_preserves_read_timestamp()
+    {
+        var tokenRequestFile = Path.Combine(Path.GetTempPath(), $"codex-switch-token-request-{Guid.NewGuid():N}.marker");
+        try
+        {
+            await using var client = CreateClient("token-timeout", TimeSpan.FromSeconds(1), tokenRequestFile);
+            await client.InitializeAsync("Test", "1.0", default);
+            DateTimeOffset? quotaDate = null;
+            var quotaBeforeTokenRequest = false;
+
+            var response = await client.FetchUsageAsync(default, quotaReceived: (_, at) =>
+            {
+                quotaDate = at;
+                quotaBeforeTokenRequest = !File.Exists(tokenRequestFile);
+            });
+
+            // Check protocol order recorded synchronously in the observer, without relying
+            // on a continuation running before the optional request's deadline expires.
+            Assert.True(quotaBeforeTokenRequest);
+            Assert.True(File.Exists(tokenRequestFile));
+            Assert.NotNull(quotaDate);
+            Assert.Equal(quotaDate, response.QuotasFetchedAt);
+            Assert.Equal(TokenUsageStatus.Error, response.TokenUsage!.Status);
+        }
+        finally { File.Delete(tokenRequestFile); }
+    }
+
+    [Fact]
+    public async Task FetchUsageAsync_can_skip_tokens_and_observer_failure_does_not_fail_quota_read()
+    {
+        await using var client = CreateClient("token-timeout", TimeSpan.FromSeconds(5));
+        await client.InitializeAsync("Test", "1.0", default);
+
+        var response = await client.FetchUsageAsync(default, includeTokens: false,
+            quotaReceived: (_, _) => throw new InvalidOperationException("Broken observer"));
+
+        Assert.Equal(25, response.RateLimits!.Primary!.UsedPercent);
+        Assert.NotNull(response.QuotasFetchedAt);
+        Assert.Null(response.TokenUsage);
+    }
+
+    [Theory]
+    [InlineData("oversized-line")]
+    [InlineData("oversized-unterminated")]
+    public async Task FetchRateLimitsAsync_rejects_oversized_stdout_without_echoing_it(string mode)
+    {
+        await using var client = CreateClient(mode);
+        await client.InitializeAsync("Test", "1.0", default);
+
+        var error = await Assert.ThrowsAsync<CodexRpcException>(() => client.FetchRateLimitsAsync(default));
+
+        Assert.Contains("limit", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("synthetic-payload-secret", error.Message);
+    }
+
+    [Fact]
     public async Task FetchUsageAsync_reads_server_token_totals_and_daily_buckets_after_quotas()
     {
         await using var client = CreateClient("success");
@@ -212,7 +268,8 @@ public sealed class CodexRpcClientTests
         Assert.Contains("<redacted>", error.Message, StringComparison.Ordinal);
     }
 
-    private static CodexRpcClient CreateClient(string mode, TimeSpan? timeout = null)
-        => new("dotnet", new Dictionary<string, string?> { ["FAKE_CODEX_MODE"] = mode },
+    private static CodexRpcClient CreateClient(string mode, TimeSpan? timeout = null, string? tokenRequestFile = null)
+        => new("dotnet", new Dictionary<string, string?>
+            { ["FAKE_CODEX_MODE"] = mode, ["FAKE_CODEX_TOKEN_REQUEST_FILE"] = tokenRequestFile },
             [typeof(Marker).Assembly.Location], timeout ?? TimeSpan.FromSeconds(5));
 }

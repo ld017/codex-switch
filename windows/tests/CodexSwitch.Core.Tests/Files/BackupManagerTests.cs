@@ -25,6 +25,18 @@ public sealed class BackupManagerTests
         Assert.DoesNotContain(backups, path => System.IO.Path.GetFileName(path).Contains("080001", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void CreateBackup_does_not_prune_unknown_config_files()
+    {
+        using var directory = new TestDirectory();
+        var source = directory.File("config.toml"); File.WriteAllText(source, "source");
+        var backups = directory.File("backups"); Directory.CreateDirectory(backups);
+        var unknown = Path.Combine(backups, "config-personal.toml"); File.WriteAllText(unknown, "keep");
+        new BackupManager(backups, 1).CreateBackup(source);
+        Assert.True(File.Exists(unknown));
+        Assert.Equal(2, Directory.GetFiles(backups).Length);
+    }
+
     private sealed class IncrementingClock(DateTimeOffset now)
     {
         private DateTimeOffset _now = now;
