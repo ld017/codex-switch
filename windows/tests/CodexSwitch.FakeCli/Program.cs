@@ -9,6 +9,11 @@ public static class Program
     public static async Task Main()
     {
         var mode = Environment.GetEnvironmentVariable("FAKE_CODEX_MODE") ?? "success";
+        if (mode == "environment-probe")
+        {
+            Environment.ExitCode = Environment.GetEnvironmentVariable("CODEX_SWITCH_TEST_VALUE") == "works" ? 0 : 9;
+            return;
+        }
         while (await Console.In.ReadLineAsync() is { } line)
         {
             using var document = JsonDocument.Parse(line);

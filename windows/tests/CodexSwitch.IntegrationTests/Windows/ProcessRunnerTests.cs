@@ -1,5 +1,6 @@
 using CodexSwitch.App.Windows;
 using CodexSwitch.Core.Codex;
+using CodexSwitch.FakeCli;
 
 namespace CodexSwitch.IntegrationTests.Windows;
 
@@ -10,9 +11,13 @@ public sealed class ProcessRunnerTests
     {
         var runner = new ProcessRunner();
         var specification = new ProcessSpec(
-            "powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-Command", "if ($env:CODEX_SWITCH_TEST_VALUE -ne 'works') { exit 9 }"],
-            new Dictionary<string, string?> { ["CODEX_SWITCH_TEST_VALUE"] = "works" },
+            "dotnet",
+            [typeof(Marker).Assembly.Location],
+            new Dictionary<string, string?>
+            {
+                ["FAKE_CODEX_MODE"] = "environment-probe",
+                ["CODEX_SWITCH_TEST_VALUE"] = "works",
+            },
             TimeSpan.FromSeconds(10),
             Visible: true);
 
