@@ -50,3 +50,14 @@ codesign --verify --deep --strict "$HOME/Applications/Codex Switch.app"
 ```
 
 [总体架构与实施顺序](../../architecture/refresh-and-resources.md)。
+
+## 发布隐私检查
+
+公开文档不包含实际账号身份、逐账号刷新时间或本机备份记录。应用附件去除调试信息后重新签名；三个可执行文件的个人主目录路径匹配为零。源码、历史文本和截图完成常见个人标识与凭据模式的定向检查，未发现命中；这不构成对所有形式信息的零遗漏保证。
+
+`scripts/package-macos-release.sh` 在应用和ZIP两个阶段运行 `scripts/check-release-privacy.py`，命中时仅报告相对文件、偏移和类别，不输出匹配原文。可独立复验：
+
+```sh
+python3 -m unittest discover -s scripts/tests -p 'test_release_privacy.py'
+python3 scripts/check-release-privacy.py path/to/Codex-Switch-macOS-arm64.zip
+```

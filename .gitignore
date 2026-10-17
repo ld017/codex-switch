@@ -29,3 +29,7 @@ artifacts/
 .env
 .env.*
 !.env.example
+
+# Python test/runtime caches can contain local source paths.
+__pycache__/
+*.py[cod]
