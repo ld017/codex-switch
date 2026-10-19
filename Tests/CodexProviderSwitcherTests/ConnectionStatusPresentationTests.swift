@@ -45,6 +45,21 @@ final class ConnectionStatusPresentationTests: XCTestCase {
         XCTAssertEqual(present(s).details[1].title, "本机 Sub2API 端口：已响应")
         XCTAssertEqual(present(s).title, "连接：Sub2API")
     }
+    func testPortDetailMarksItsOwnExpiredSampleEvenWhenFullDiagnosticsJustFinished() {
+        for (age, suffix) in [(59.0, ""), (60, "（缓存已过期）"), (70, "（缓存已过期）"), (-1, "（缓存已过期）")] {
+            for online in [true, false] {
+                var s = ConnectionStatusSnapshot()
+                s.provider = .configured(.sub2api)
+                s.sub2APIOnline = online
+                s.sub2APICheckedAt = now.addingTimeInterval(-age)
+                s.diagnosticsCheckedAt = now
+                let result = online ? "已响应" : "检查未通过"
+                XCTAssertEqual(present(s).details[1].title, "本机 Sub2API 端口：" + result + suffix)
+                s.isRefreshingDiagnostics = true
+                XCTAssertEqual(present(s).details[1].title, "本机 Sub2API 端口：" + result + suffix)
+            }
+        }
+    }
     func testReadinessDescriptionsDescribePreflightOnly() {
         let cases: [(ClashReadinessStatus, String)] = [
             (.ready, "符合当前应用要求"), (.localPortUnavailable, "预期端口检查未通过"),

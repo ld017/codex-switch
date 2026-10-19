@@ -54,8 +54,11 @@ struct ConnectionStatusPresentation: Equatable {
             emphasis = failed ? .attention : .normal
         }
         let pending = s.isRefreshingDiagnostics ? "检查中…" : "未检查"
-        let port = s.sub2APIOnline.map { $0 ? "已响应" : "检查未通过" }
-            ?? (s.isRefreshingActiveChannel || s.isRefreshingDiagnostics ? "检查中…" : "未检查")
+        let port = s.sub2APIOnline.map { online in
+            let result = online ? "已响应" : "检查未通过"
+            return result + (ConnectionStatusSnapshot.isFresh(s.sub2APICheckedAt, now: now)
+                ? "" : "（缓存已过期）")
+        } ?? (s.isRefreshingActiveChannel || s.isRefreshingDiagnostics ? "检查中…" : "未检查")
         let environment = s.proxyConflictVariables.map {
             $0.isEmpty ? "未发现已知冲突" : "发现 \($0.count) 项已知风险"
         } ?? pending

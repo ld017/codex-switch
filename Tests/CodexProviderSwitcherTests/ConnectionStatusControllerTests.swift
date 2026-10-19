@@ -167,6 +167,8 @@ final class ConnectionStatusControllerTests: XCTestCase {
         await eventually { c.snapshot.diagnosticsCheckedAt != nil }
         XCTAssertEqual(c.snapshot.sub2APICheckedAt, Date(timeIntervalSince1970: 1_000))
         XCTAssertEqual(c.snapshot.diagnosticsCheckedAt, now)
+        XCTAssertEqual(ConnectionStatusPresentation.make(snapshot: c.snapshot, now: now).details[1].title,
+            "本机 Sub2API 端口：检查未通过（缓存已过期）")
         source.provider = .sub2api
         // A provider refresh invalidates all previous-channel samples.
         c.refreshProvider(); XCTAssertNil(c.snapshot.sub2APICheckedAt)
