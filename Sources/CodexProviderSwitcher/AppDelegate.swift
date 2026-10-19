@@ -10,6 +10,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let loginItems = LoginItemManager()
     private let diagnosticLogger = SwitchDiagnosticLogger()
     private let enableLoginItemOnLaunch: Bool
+    private lazy var warmupViewModel = WarmupViewModel()
+    private lazy var warmupWindowController = WarmupWindowController(viewModel: self.warmupViewModel)
+    private lazy var warmupService = WarmupService(viewModel: self.warmupViewModel,
+        profiles: { [weak self] in self?.accounts.warmupProfiles() ?? [] },
+        canStart: { [weak self] in guard let self else { return false }; return !self.switching && !self.accounts.hasAuthMutationInFlight },
+        auth: { [weak self] id in
+            guard let self else { throw CancellationError() }
+            return try await self.accounts.warmupAuthData(profileID: id)
+        })
     private lazy var accounts = AccountManager(
         currentProvider: { [weak self] in
             guard let self else { throw CodexSystemError.configMissing }
@@ -36,6 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         },
         onIconChange: { [weak self] image in
             self?.statusItem?.button?.image = image
+        },
+        openWarmup: { [weak self] in
+            self?.openWarmupWindow()
         }
     )
 
@@ -85,6 +97,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switchActivity.isActive
     }
 
+    private func openWarmupWindow() {
+        self.warmupService.refreshProfiles()
+        self.warmupWindowController.show()
+    }
+
     init(enableLoginItemOnLaunch: Bool = false) {
         self.enableLoginItemOnLaunch = enableLoginItemOnLaunch
         super.init()
@@ -122,6 +139,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         refreshStatus()
+        warmupService.onChange = { [weak self] in self?.rebuildMenu() }
+        accounts.warmupTitle = { [weak self] in self?.warmupService.menuTitle ?? "定时预热…" }
+        accounts.beforeAccountMutation = { [weak self] in try await self?.warmupService.cancelForAccountMutation() }
+        warmupService.start()
         accounts.start()
         refreshTimer = Timer.scheduledTimer(
             withTimeInterval: 60,
@@ -147,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        warmupService.stop()
         refreshTimer?.invalidate()
         statusRefreshTask?.cancel()
         accounts.stop()
@@ -159,14 +181,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationShouldTerminate(
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
-        switching ? .terminateCancel : .terminateNow
+        guard !switching else { return .terminateCancel }
+        guard warmupService.isRunning else { return .terminateNow }
+        Task { await warmupService.shutdown(); sender.reply(toApplicationShouldTerminate: true) }
+        return .terminateLater
     }
 
     func applicationShouldHandleReopen(
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        statusItem.button?.performClick(nil)
+        // Return the reopen Apple Event before entering the menu tracking loop.
+        // Otherwise activation clients and subsequent quit events can hang.
+        DispatchQueue.main.async { [weak self] in self?.statusItem.button?.performClick(nil) }
         return true
     }
 
@@ -332,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard confirmSwitch(to: target) else {
                     return
                 }
+                try await warmupService.cancelForAccountMutation()
                 try await switchPreparationCoordinator.prepare(
                     target: target
                 )

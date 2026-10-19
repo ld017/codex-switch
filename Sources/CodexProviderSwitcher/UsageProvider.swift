@@ -12,6 +12,7 @@ final class UsageProvider {
     private let store: ProfileStore
     private let paths: AppPaths
     private let fetch: Fetch
+    private let coordinator: CLIWorkCoordinator
     private var pendingForceRefresh = false
     private(set) var completedProfiles = 0
     private(set) var totalProfiles = 0
@@ -35,13 +36,15 @@ final class UsageProvider {
     private var pendingLeaseRelease: Task<Void, Never>?
     var onChange: (() -> Void)?
 
-    init(store: ProfileStore, fetch: @escaping Fetch = { id, auth, config, includeTokens, onQuota in
+    init(store: ProfileStore, coordinator: CLIWorkCoordinator = .shared,
+         fetch: @escaping Fetch = { id, auth, config, includeTokens, onQuota in
         try await CLIUsageFetcher.fetch(profileId: id, authData: auth, codexConfigURL: config,
             clientVersion: AppInfo.version, includeTokenActivity: includeTokens, onQuota: onQuota)
     }) {
         self.store = store
         self.paths = store.usageCachePaths
         self.fetch = fetch
+        self.coordinator = coordinator
     }
 
     func cancelRefreshes() {
@@ -71,6 +74,7 @@ final class UsageProvider {
             let paths = self.paths
             self.pendingLeaseRelease = Task {
                 await previous?.value
+                await cancelledTask?.value
                 for (profileID, token) in leasesToRelease {
                     await Self.removeLease(profileIDs: [profileID], expectedToken: token, paths: paths)
                 }
@@ -79,6 +83,12 @@ final class UsageProvider {
         if cancelledActiveRefresh {
             self.store.flushCacheIfDirty()
         }
+    }
+
+    func cancelAndWait() async {
+        cancelRefreshes()
+        await pendingCancelledRefresh?.value
+        await pendingLeaseRelease?.value
     }
 
     func refreshAll(force: Bool = false) {
@@ -244,6 +254,21 @@ final class UsageProvider {
     private func refreshGroup(
         _ fetchGroup: RefreshGroup, generation: UUID, source: ProfileStore.UsageAuthSource, force: Bool
     ) async {
+        do {
+            let permit = try await self.coordinator.acquireOrdinary()
+            let freshGroups = await Self.groupContexts(fetchGroup.contexts, source: self.store.usageAuthSource())
+            for fresh in freshGroups {
+                await self.refreshGroupWithPermit(fresh, generation: generation, source: source, force: force)
+            }
+            await self.coordinator.release(permit)
+        } catch { /* Cancellation while queued owns no child or lease. */ }
+    }
+
+    private func refreshGroupWithPermit(
+        _ originalGroup: RefreshGroup, generation: UUID, source: ProfileStore.UsageAuthSource, force: Bool
+    ) async {
+        var fetchGroup = originalGroup
+        guard !Task.isCancelled, self.refreshGeneration == generation else { return }
         guard !self.store.isAuthMutationInProgress() else { return }
         var diagnostics = Dictionary(uniqueKeysWithValues: fetchGroup.contexts.map {
             ($0.id, ProfileRefreshDiagnostics(lastAttemptAt: Date()))
@@ -257,7 +282,7 @@ final class UsageProvider {
                 generation: generation, source: source)
         }
 
-        guard let authData = fetchGroup.authData else {
+        guard fetchGroup.authData != nil else {
             for context in fetchGroup.contexts {
                 if let error = fetchGroup.loadError {
                     // Loading the auth blob threw. `.notFound` means genuinely no
@@ -311,12 +336,25 @@ final class UsageProvider {
         // `do`/`catch` below.
 
         do {
+            // Renewal may have replaced tokens while this operation queued.
+            // All affected cards are now leased; reload again before using any
+            // credential, and re-group if aliases have diverged.
+            let fresh = await Self.groupContexts(fetchGroup.contexts, source: self.store.usageAuthSource())
+            if fresh.count != 1 {
+                await self.releaseLease(fetchGroup.contexts.map(\.id), expectedToken: reservation.token)
+                for group in fresh { await self.refreshGroupWithPermit(group, generation: generation, source: source, force: force) }
+                return
+            }
+            guard let group = fresh.first, let authData = group.authData else { throw AuthError.notFound }
+            fetchGroup = group
+            try Task.checkCancellation()
             let includeTokens = fetchGroup.contexts.contains {
                 Self.needsTokenRefresh(cached: $0.cached, force: force)
             }
+            let publishedContexts = fetchGroup.contexts
             let snapshot = try await self.fetch(fetchGroup.contexts[0].id, authData,
                 self.store.codexConfigURL(), includeTokens, { quota in
-                    for context in fetchGroup.contexts {
+                    for context in publishedContexts {
                         let cachedQuota = await Self.mergingTokenActivity(quota, cached: context.cached)
                         await self.publish(context, status: .available(cachedQuota),
                             diagnostics: ProfileRefreshDiagnostics(lastAttemptAt: Date(), lastDecision: "quota-ready"),

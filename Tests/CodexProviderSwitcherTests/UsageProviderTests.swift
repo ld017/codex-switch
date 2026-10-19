@@ -116,6 +116,35 @@ final class UsageProviderTests: XCTestCase {
         XCTAssertEqual(maximum, 1, "Replacement cycle must await the previous CLI teardown")
     }
 
+    // Break caught: auth is captured before a warmup batch wait and reused
+    // after renewal has replaced the saved credential while it was queued.
+    func testQueuedRefreshReloadsAuthAfterTheBatchDrains() async throws {
+        let (home, store) = try fixture()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let paths = AppPaths(environment: ["CODEX_PROFILE_HOME": home.path])
+        let coordinator = CLIWorkCoordinator()
+        let batch = try await coordinator.acquireBatch()
+        let tracker = CapturedRefreshAuth()
+        let value = self.snapshot(4)
+        let provider = UsageProvider(store: store, coordinator: coordinator, fetch: { id, auth, _, _, _ in
+            await tracker.record(id, auth)
+            return value
+        })
+        provider.refreshAll(force: true)
+        // The batch keeps all fetch closures blocked while groupContexts has
+        // time to read the old blob. This is a real isolated file-vault edit.
+        try await Task.sleep(for: .milliseconds(80))
+        let replacement = Data("{\"credential_revision\":\"after-renewal\"}".utf8)
+        let vault = FileAuthVault(root: paths.devAuthStoreURL, authLockURL: paths.authLockURL)
+        try vault.saveAuthBlob(replacement, profileID: "2")
+        let beforeRelease = await tracker.values
+        XCTAssertTrue(beforeRelease.isEmpty)
+        await coordinator.release(batch)
+        while provider.isRefreshing { try await Task.sleep(for: .milliseconds(5)) }
+        let fetched = await tracker.values
+        XCTAssertEqual(fetched["2"], replacement)
+    }
+
     func testTokenTTLAndPartialDataKeepFreshFields() throws {
         let now = Date(timeIntervalSince1970: 10_000)
         let days = try JSONDecoder().decode([TokenActivity.Day].self,
@@ -142,4 +171,9 @@ private actor FetchTracker {
     private var running = 0
     func enter() { count += 1; running += 1; maximum = max(maximum, running) }
     func leave() { running -= 1 }
+}
+
+private actor CapturedRefreshAuth {
+    private(set) var values: [String: Data] = [:]
+    func record(_ id: String, _ data: Data) { values[id] = data }
 }

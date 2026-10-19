@@ -14,6 +14,10 @@ final class AccountManager: NSObject, NSMenuDelegate {
     private let showError: (Error, String) -> Void
     private let onChange: () -> Void
     private let onIconChange: (NSImage) -> Void
+    private let openWarmup: () -> Void
+    var warmupTitle: (() -> String)?
+    var beforeAccountMutation: (() async throws -> Void)?
+    var hasAuthMutationInFlight: Bool { self.store.isAuthMutationInProgress() }
 
     private weak var menu: NSMenu?
     private var refreshTimer: Timer?
@@ -32,9 +36,11 @@ final class AccountManager: NSObject, NSMenuDelegate {
         prepareSharedHistory: @escaping () async throws -> Void,
         showError: @escaping (Error, String) -> Void,
         onChange: @escaping () -> Void,
-        onIconChange: @escaping (NSImage) -> Void
+        onIconChange: @escaping (NSImage) -> Void,
+        openWarmup: @escaping () -> Void,
+        store: ProfileStore? = nil
     ) {
-        self.store = ProfileStore()
+        self.store = store ?? ProfileStore()
         self.usageProvider = UsageProvider(store: self.store)
         self.currentProvider = currentProvider
         self.beginOperation = beginOperation
@@ -43,6 +49,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
         self.showError = showError
         self.onChange = onChange
         self.onIconChange = onIconChange
+        self.openWarmup = openWarmup
         super.init()
     }
 
@@ -145,6 +152,14 @@ final class AccountManager: NSObject, NSMenuDelegate {
         self.refreshMenuItem = refresh
         refresh.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
         menu.addItem(refresh)
+
+        let warmup = NSMenuItem(
+            title: self.warmupTitle?() ?? "定时预热…",
+            action: #selector(self.openWarmupWindow),
+            keyEquivalent: "")
+        warmup.target = self
+        warmup.image = NSImage(systemSymbolName: "clock", accessibilityDescription: nil)
+        menu.addItem(warmup)
 
         if self.liveAuthWarning == .unmanaged || self.savedProfileCount == 0 {
             let saveCurrent = NSMenuItem(
@@ -414,6 +429,8 @@ final class AccountManager: NSObject, NSMenuDelegate {
                 self.finishOperation()
             }
             do {
+                await self.usageProvider.cancelAndWait()
+                try await self.beforeAccountMutation?()
                 try await self.prepareSharedHistory()
             } catch {
                 self.showError(error, "账号切换失败")
@@ -456,6 +473,45 @@ final class AccountManager: NSObject, NSMenuDelegate {
         self.onChange()
     }
 
+    @objc private func openWarmupWindow() {
+        self.menu?.cancelTracking()
+        DispatchQueue.main.async { [weak self] in self?.openWarmup() }
+    }
+
+    func warmupProfiles() -> [WarmupProfileItem] {
+        self.store.config.profiles.map { profile in
+            let available = self.store.authStoreExists(for: profile.id)
+            return WarmupProfileItem(id: profile.id, label: profile.label, isAvailable: available)
+        }
+    }
+
+    func warmupAuthData(profileID: String) async throws -> Data {
+        guard !self.store.isAuthMutationInProgress(),
+              self.store.config.profiles.contains(where: { $0.id == profileID }) else {
+            throw CodexRPCError.requestFailed("账号正在切换或已移除")
+        }
+        let source = self.store.usageAuthSource()
+        let isLive = self.store.liveProfileId == profileID
+        return try await Task.detached {
+            guard let saved = try source.vault.loadAuthBlob(profileID: profileID) else { throw AuthError.notFound }
+            if isLive, FileManager.default.fileExists(atPath: source.liveAuthURL.path) {
+                let live = try Data(contentsOf: source.liveAuthURL)
+                guard AuthBlob.identityMatches(saved, live) else { throw CodexRPCError.requestFailed("当前登录与所选账号不一致") }
+                return live
+            }
+            return saved
+        }.value
+    }
+
+    func performAccountMutation<T>(_ operation: @MainActor () async throws -> T) async throws -> T {
+        guard !store.isAuthMutationInProgress() else { throw CodexRPCError.requestFailed("另一个账号操作尚未结束") }
+        store.beginAuthMutation()
+        defer { store.endAuthMutation() }
+        await usageProvider.cancelAndWait()
+        try await beforeAccountMutation?()
+        return try await operation()
+    }
+
     @objc private func addProfile() {
         self.menu?.cancelTracking()
         let profile = self.store.addProfile()
@@ -477,14 +533,16 @@ final class AccountManager: NSObject, NSMenuDelegate {
         guard let label = self.promptForLabel(defaultValue: target.label, title: "保存当前 OpenAI 登录") else {
             return
         }
-        do {
-            try self.store.importLiveAuth(to: target.id)
-            self.store.updateLabel(for: target.id, label: label)
-            self.syncActiveProfile(force: true)
-            self.requestRefresh(force: true)
-            self.onChange()
-        } catch {
-            self.showError(error, "保存当前登录失败")
+        Task { @MainActor in
+            do {
+                try await self.performAccountMutation {
+                    try self.store.importLiveAuth(to: target.id)
+                    self.store.updateLabel(for: target.id, label: label)
+                }
+                self.syncActiveProfile(force: true)
+                self.requestRefresh(force: true)
+                self.onChange()
+            } catch { self.showError(error, "保存当前登录失败") }
         }
     }
 
@@ -534,11 +592,11 @@ final class AccountManager: NSObject, NSMenuDelegate {
         alert.addButton(withTitle: "取消")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            try self.store.removeProfile(profile.id)
-            self.onChange()
-        } catch {
-            self.showError(error, "无法移除账号")
+        Task { @MainActor in
+            do {
+                try await self.performAccountMutation { try self.store.removeProfile(profile.id) }
+                self.onChange()
+            } catch { self.showError(error, "无法移除账号") }
         }
     }
 
@@ -558,24 +616,20 @@ final class AccountManager: NSObject, NSMenuDelegate {
     }
 
     private func startLogin(for id: String) {
-        let store = self.store
-        self.usageProvider.cancelRefreshes()
-        store.beginAuthMutation()
-        CodexBridge.startLogin(profileId: id) { [weak self] result in
-            guard let self else {
-                store.endAuthMutation()
-                return
-            }
-            store.endAuthMutation()
-            switch result {
-            case .success:
+        Task { @MainActor in
+            do {
+                try await self.performAccountMutation {
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        CodexBridge.startLogin(profileId: id) { result in
+                            continuation.resume(with: result.mapError { $0 as Error })
+                        }
+                    }
+                }
                 self.syncActiveProfile(force: true)
                 self.requestRefresh(force: true)
                 self.onChange()
-            case .failure(let error):
-                if !error.isUserCancelled {
-                    self.showError(error, "账号登录失败")
-                }
+            } catch {
+                if (error as? CodexBridgeError)?.isUserCancelled != true { self.showError(error, "账号登录失败") }
             }
         }
     }
