@@ -27,7 +27,11 @@ trap cleanup EXIT
 
 cd "${PROJECT_DIRECTORY}"
 /usr/bin/swift test
-/usr/bin/swift build -c release
+/usr/bin/swift build -c release \
+    -Xswiftc -debug-prefix-map -Xswiftc "${USER_HOME}=/build/user" \
+    -Xswiftc -file-prefix-map -Xswiftc "${USER_HOME}=/build/user" \
+    -Xswiftc -file-compilation-dir -Xswiftc /build/codex-switch \
+    -Xcc "-fdebug-prefix-map=${USER_HOME}=/build/user"
 
 /bin/mkdir -p \
     "${STAGED_APPLICATION}/Contents/MacOS" \
@@ -57,6 +61,13 @@ cd "${PROJECT_DIRECTORY}"
     "${STAGED_APPLICATION}/Contents/Helpers/codex-profile"
 /usr/bin/plutil -lint "${STAGED_APPLICATION}/Contents/Info.plist"
 
+for executable in \
+    "${STAGED_APPLICATION}/Contents/MacOS/CodexProviderSwitcher" \
+    "${STAGED_APPLICATION}/Contents/Helpers/codex-profile" \
+    "${STAGED_APPLICATION}/Contents/MacOS/CodexSharedHistoryProxy"; do
+    /usr/bin/strip -S "${executable}"
+done
+
 /usr/bin/codesign --force --sign "${SIGNING_IDENTITY}" \
     "${STAGED_APPLICATION}/Contents/MacOS/CodexProviderSwitcher"
 /usr/bin/codesign --force --sign "${SIGNING_IDENTITY}" \
@@ -66,6 +77,7 @@ cd "${PROJECT_DIRECTORY}"
 /usr/bin/codesign --force --sign "${SIGNING_IDENTITY}" \
     "${STAGED_APPLICATION}"
 /usr/bin/codesign --verify --deep --strict "${STAGED_APPLICATION}"
+python3 "${SCRIPT_DIRECTORY}/check-release-privacy.py" "${STAGED_APPLICATION}"
 
 if /usr/bin/pgrep -f "^${FINAL_EXECUTABLE}$|^${LEGACY_APPLICATION}/Contents/MacOS/CodexProviderSwitcher$" \
     >/dev/null 2>&1; then
