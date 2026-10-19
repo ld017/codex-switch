@@ -1,12 +1,12 @@
 # Codex Switch
 
-**macOS 最新版：[v2.3.2 下载与更新说明](https://github.com/ld017/codex-switch/releases/tag/v2.3.2)**（Apple Silicon；ad-hoc 签名，未公证）。
+**macOS 最新版：[v2.3.3 下载与更新说明](https://github.com/ld017/codex-switch/releases/tag/v2.3.3)**（Apple Silicon；ad-hoc 签名，未公证）。
 
 **Windows 最新版：[1.0.6 安装包与免安装版](https://github.com/ld017/codex-switch/releases/tag/windows-v1.0.6)**（Windows 10/11 x64，自带 .NET 8 运行时）。[Windows 更新说明](docs/releases/windows-v1.0.6.md)。
 
 ![Codex Switch Windows 界面示例，全部为合成账号和合成数据](docs/images/codex-switch-windows-example.png)
 
-上图仅使用合成账号和合成用量数据展示 Windows 布局。macOS 2.3.2 修复刷新失败并优化后台资源，详见[发布说明](docs/releases/v2.3.2.md)。
+上图仅使用合成账号和合成用量数据展示 Windows 布局。macOS 2.3.3 将连接诊断收进可展开入口，详见[发布说明](docs/releases/v2.3.3.md)。
 
 `Codex Switch` 是一个 macOS 菜单栏工具和 Windows 桌面面板应用，用于统一管理两类独立状态：
 
