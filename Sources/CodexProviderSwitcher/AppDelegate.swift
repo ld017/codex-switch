@@ -53,10 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
-    private let currentItem = NSMenuItem()
-    private let serviceItem = NSMenuItem()
-    private let proxyEnvironmentItem = NSMenuItem()
-    private let sharedHistoryStatusItem = NSMenuItem()
+    private lazy var connectionStatus = ConnectionStatusController(source: system)
+    private lazy var connectionSection = ConnectionMenuSection(
+        refreshSharedHistoryItem: refreshSharedHistoryItem,
+        onOpen: { [weak self] in self?.connectionStatus.requestDiagnostics() }
+    )
+    private var isMainMenuOpen = false
     private let refreshSharedHistoryItem = NSMenuItem(
         title: "刷新共享任务/项目视图...",
         action: #selector(refreshSharedHistory),
@@ -90,7 +92,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var sharedHistoryRestartCoordinator =
         SharedHistoryRestartCoordinator(system: system)
     private var refreshTimer: Timer?
-    private var statusRefreshTask: Task<Void, Never>?
     private var pendingAction: SwitcherURLAction?
 
     private var switching: Bool {
@@ -170,7 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         warmupService.stop()
         refreshTimer?.invalidate()
-        statusRefreshTask?.cancel()
+        connectionStatus.stop()
         accounts.stop()
         NSAppleEventManager.shared().removeEventHandler(
             forEventClass: AEEventClass(kInternetEventClass),
@@ -198,12 +199,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        guard menu === self.menu else { return }
+        isMainMenuOpen = true
         refreshStatus()
         accounts.menuWillOpen()
         rebuildMenu()
     }
 
     func menuDidClose(_ menu: NSMenu) {
+        guard menu === self.menu else { return }
+        isMainMenuOpen = false
         accounts.menuDidClose()
     }
 
@@ -225,10 +230,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             button.toolTip = "Codex Switch"
         }
 
-        currentItem.isEnabled = false
-        serviceItem.isEnabled = false
-        proxyEnvironmentItem.isEnabled = false
-        sharedHistoryStatusItem.isEnabled = false
+        connectionStatus.onChange = { [weak self] snapshot in
+            self?.connectionSection.update(.make(snapshot: snapshot, now: Date()))
+        }
         openAIItem.target = self
         sub2APIItem.target = self
         refreshSharedHistoryItem.target = self
@@ -255,40 +259,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: "")
         openCodexItem.target = self
 
-        menu.removeAllItems()
-
-        let title = NSMenuItem(title: "Codex Switch", action: nil, keyEquivalent: "")
-        title.isEnabled = false
-        title.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
-        menu.addItem(title)
-        menu.addItem(currentItem)
-        menu.addItem(serviceItem)
-        menu.addItem(proxyEnvironmentItem)
-        menu.addItem(sharedHistoryStatusItem)
-        menu.addItem(.separator())
-        menu.addItem(openAIItem)
-        menu.addItem(sub2APIItem)
-        menu.addItem(refreshSharedHistoryItem)
-        menu.addItem(.separator())
-
-        accounts.appendItems(to: menu)
-
-        menu.addItem(.separator())
-        menu.addItem(openCodexItem)
-        menu.addItem(loginItem)
-        menu.addItem(quitItem)
+        MainMenuBuilder.populate(
+            menu: menu,
+            connectionItem: connectionSection.item,
+            appendAccounts: { accounts.appendItems(to: $0) },
+            providerItems: [openAIItem, sub2APIItem],
+            trailingItems: [openCodexItem, loginItem, quitItem]
+        )
     }
 
     private func refreshStatus() {
-        do {
-            let provider = try system.currentProvider()
-            currentItem.title = "当前连接：\(provider.displayName)"
+        connectionStatus.refreshProvider()
+        if case .configured(let provider) = connectionStatus.snapshot.provider {
             openAIItem.state = provider == .openai ? .on : .off
             sub2APIItem.state = provider == .sub2api ? .on : .off
             openAIItem.isEnabled = !switching && provider != .openai
             sub2APIItem.isEnabled = !switching && provider != .sub2api
-        } catch {
-            currentItem.title = "当前连接：无法读取"
+        } else {
             openAIItem.state = .off
             sub2APIItem.state = .off
             openAIItem.isEnabled = !switching
@@ -297,25 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loginItem.state = loginItems.isEnabled ? .on : .off
         quitItem.isEnabled = !switching
         refreshSharedHistoryItem.isEnabled = !switching
-        guard statusRefreshTask == nil else { return }
-        statusRefreshTask = Task {
-            defer { self.statusRefreshTask = nil }
-            async let onlineCheck = system.sub2APIIsOnline()
-            async let conflictsCheck = system.proxyEnvironmentConflicts()
-            async let configuredCheck = system.sharedHistoryIsConfigured()
-            let (online, conflicts, configured) = await (onlineCheck, conflictsCheck, configuredCheck)
-            guard !Task.isCancelled else { return }
-            serviceItem.title = online ? "Sub2API 服务：在线" : "Sub2API 服务：离线"
-            if !conflicts.isEmpty {
-                proxyEnvironmentItem.title = "代理状态：环境冲突"
-            } else {
-                let readiness = await system.clashReadinessStatus()
-                guard !Task.isCancelled else { return }
-                proxyEnvironmentItem.title = "代理状态：" + readiness.userDescription
-            }
-            sharedHistoryStatusItem.title = configured
-                ? "共享任务/项目：已配置" : "共享任务/项目：待配置"
-        }
+        if isMainMenuOpen { connectionStatus.requestActiveChannelStatus() }
     }
 
     @objc private func switchToOpenAI() {
@@ -382,6 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func finishSwitching() {
         switchActivity.finish()
+        connectionStatus.invalidate()
         refreshStatus()
     }
 
