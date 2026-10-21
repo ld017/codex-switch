@@ -92,6 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var sharedHistoryRestartCoordinator =
         SharedHistoryRestartCoordinator(system: system)
     private var refreshTimer: Timer?
+    private var clockObservers: [NSObjectProtocol] = []
+    private lazy var visibleTimeClock = VisibleTimeClock { [weak self] now in
+        self?.refreshDisplayedTimes(now: now)
+    }
     private var pendingAction: SwitcherURLAction?
 
     private var switching: Bool {
@@ -145,14 +149,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         accounts.beforeAccountMutation = { [weak self] in try await self?.warmupService.cancelForAccountMutation() }
         warmupService.start()
         accounts.start()
-        refreshTimer = Timer.scheduledTimer(
-            withTimeInterval: 60,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshStatus()
-            }
+        configureRefreshTimer()
+        for name in [Notification.Name("NSSystemClockDidChangeNotification"),
+                     NSNotification.Name.NSSystemTimeZoneDidChange] {
+            clockObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    self?.configureRefreshTimer()
+                    self?.visibleTimeClock.clockDidChange()
+                }
+            })
         }
+        clockObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
+            object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    self?.configureRefreshTimer()
+                    self?.visibleTimeClock.clockDidChange()
+                }
+            })
         if let action = pendingAction {
             pendingAction = nil
             handle(action)
@@ -171,6 +184,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         warmupService.stop()
         refreshTimer?.invalidate()
+        visibleTimeClock.stop()
+        for observer in clockObservers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        clockObservers.removeAll()
         connectionStatus.stop()
         accounts.stop()
         NSAppleEventManager.shared().removeEventHandler(
@@ -204,11 +223,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshStatus()
         accounts.menuWillOpen()
         rebuildMenu()
+        visibleTimeClock.setVisible(true)
     }
 
     func menuDidClose(_ menu: NSMenu) {
         guard menu === self.menu else { return }
         isMainMenuOpen = false
+        visibleTimeClock.setVisible(false)
         accounts.menuDidClose()
     }
 
@@ -266,6 +287,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             providerItems: [openAIItem, sub2APIItem],
             trailingItems: [openCodexItem, loginItem, quitItem]
         )
+    }
+
+    private func configureRefreshTimer() {
+        refreshTimer?.invalidate()
+        // Preserve the original default-mode status timer. During menu tracking
+        // only VisibleTimeClock runs, and that callback renders cached values.
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshStatus() }
+        }
+    }
+
+    private func refreshDisplayedTimes(now: Date) {
+        guard isMainMenuOpen else { return }
+        connectionSection.update(.make(snapshot: connectionStatus.snapshot, now: now))
+        accounts.refreshDisplayedTimes(now: now)
     }
 
     private func refreshStatus() {

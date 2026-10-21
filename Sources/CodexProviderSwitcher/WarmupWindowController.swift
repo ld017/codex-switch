@@ -33,10 +33,14 @@ final class WarmupWindowController: NSWindowController, NSWindowDelegate {
         if !panel.isVisible { panel.center() }
         NSApp.activate(ignoringOtherApps: false)
         panel.makeKeyAndOrderFront(nil)
+        viewModel.refreshClock()
         viewModel.resources = WarmupResources.snapshot()
         resourceTimer?.invalidate()
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.viewModel.resources = WarmupResources.snapshot() }
+            Task { @MainActor in
+                self?.viewModel.refreshClock()
+                self?.viewModel.resources = WarmupResources.snapshot()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         resourceTimer = timer
@@ -64,6 +68,8 @@ private struct WarmupView: View {
                 Spacer()
                 if model.isRunning { ProgressView().controlSize(.small) }
             }
+            Text("当前北京时间：\(model.currentTimeText)")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
             Picker("页面", selection: $tab) {
                 Text("计划设置").tag(0)
                 Text("执行结果").tag(1)
@@ -83,6 +89,7 @@ private struct WarmupView: View {
             }
         }
         .padding(22)
+        .environment(\.locale, Locale(identifier: "zh_CN"))
         .environment(\.timeZone, WarmupPlanner.calendar.timeZone)
         .environment(\.calendar, WarmupPlanner.calendar)
         .frame(minWidth: 520, minHeight: 450)

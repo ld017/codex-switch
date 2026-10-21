@@ -1,5 +1,6 @@
 import AppKit
 import CodexProfileCore
+import SwiftUI
 import XCTest
 @testable import CodexProviderSwitcher
 
@@ -74,5 +75,53 @@ final class CompactMenuIntegrationTests: XCTestCase {
         XCTAssertEqual(opens, 10); XCTAssertEqual(accountAppends, 1)
         XCTAssertTrue(zip(rootItems, menu.items).allSatisfy { $0 === $1 })
         XCTAssertTrue(token.submenu === tokenMenu)
+    }
+
+    func testProductionAccountHostsStartAtSharedMinimumWidth() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let paths = AppPaths(environment: ["CODEX_PROFILE_HOME": home.path])
+        try FileManager.default.createDirectory(at: paths.switcherHome, withIntermediateDirectories: true)
+        let profile = ProfileConfig(id: "fixture", label: "Fixture")
+        try JSONEncoder().encode(AppConfig(profiles: [profile], activeProfile: profile.id)).write(to: paths.configURL)
+        let vault = FileAuthVault(root: paths.devAuthStoreURL, authLockURL: paths.authLockURL)
+        let store = ProfileStore(authVault: vault, environment: paths.environment)
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        store.updateStatus("fixture", .available(UsageSnapshot(
+            planType: "plus", creditsRemaining: nil, primaryUsedPercent: 20,
+            primaryResetAt: now.addingTimeInterval(3600), secondaryUsedPercent: 0,
+            secondaryResetAt: nil, fetchedAt: now, primaryWindowDurationMins: 300)))
+        let manager = AccountManager(currentProvider: { .openai }, beginOperation: { true },
+            finishOperation: {}, prepareSharedHistory: {}, showError: { _, _ in },
+            onChange: {}, onIconChange: { _ in }, openWarmup: {}, store: store)
+        let menu = NSMenu()
+        manager.appendItems(to: menu)
+        let hosts = menu.items.compactMap(\.view)
+        XCTAssertGreaterThanOrEqual(hosts.count, 2)
+        XCTAssertTrue(hosts.allSatisfy { abs($0.frame.width - AccountMenuLayout.minimumContentWidth) < 0.01 })
+    }
+
+    func testInitialAccountBatchUsesOneNowForHeaderAndCard() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let paths = AppPaths(environment: ["CODEX_PROFILE_HOME": home.path])
+        try FileManager.default.createDirectory(at: paths.switcherHome, withIntermediateDirectories: true)
+        let profile = ProfileConfig(id: "fixture", label: "Fixture")
+        try JSONEncoder().encode(AppConfig(profiles: [profile], activeProfile: profile.id)).write(to: paths.configURL)
+        let store = ProfileStore(authVault: FileAuthVault(root: paths.devAuthStoreURL, authLockURL: paths.authLockURL), environment: paths.environment)
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        store.updateStatus("fixture", .available(UsageSnapshot(
+            planType: "plus", creditsRemaining: nil, primaryUsedPercent: 20,
+            primaryResetAt: now.addingTimeInterval(60), secondaryUsedPercent: 0,
+            secondaryResetAt: nil, fetchedAt: now, primaryWindowDurationMins: 300)))
+        let manager = AccountManager(currentProvider: { .openai }, beginOperation: { true },
+            finishOperation: {}, prepareSharedHistory: {}, showError: { _, _ in },
+            onChange: {}, onIconChange: { _ in }, openWarmup: {}, store: store)
+        let menu = NSMenu()
+        manager.appendItems(to: menu, now: now)
+        let header = try XCTUnwrap(menu.items.compactMap { $0.view as? NSHostingView<UsageHeaderView> }.first)
+        let card = try XCTUnwrap(menu.items.compactMap { $0.view as? NSHostingView<ProfileCardView> }.first)
+        XCTAssertEqual(header.rootView.now, now)
+        XCTAssertEqual(card.rootView.now, now)
     }
 }

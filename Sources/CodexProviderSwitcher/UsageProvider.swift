@@ -96,7 +96,7 @@ final class UsageProvider {
             self.pendingForceRefresh = self.pendingForceRefresh || force
             return
         }
-        guard force || Date().timeIntervalSince(self.lastRefreshAll) > 60 else { return }
+        guard Self.needsQuotaRefresh(lastRefresh: self.lastRefreshAll, force: force) else { return }
 
         // The nightly renewal LaunchAgent writes rejections to the shared cache
         // file from a separate process; re-read them at the start of every
@@ -157,6 +157,11 @@ final class UsageProvider {
                 }
             }
         }
+    }
+
+    static func needsQuotaRefresh(lastRefresh: Date, force: Bool = false, now: Date = Date()) -> Bool {
+        let age = now.timeIntervalSince(lastRefresh)
+        return force || age < 0 || age >= 60
     }
 
     static func needsTokenRefresh(cached: UsageSnapshot?, force: Bool, now: Date = Date()) -> Bool {

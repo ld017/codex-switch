@@ -37,7 +37,7 @@ final class TokenUsagePresentationTests: XCTestCase {
          {"startDate":"2026-10-04","tokens":1000000},
          {"startDate":"2026-10-00","tokens":1000000}]
         """)
-        let month = TokenUsagePresentation.monthUsage(data, now: now, timeZone: TimeZone(secondsFromGMT: 0)!)
+        let month = TokenUsagePresentation.monthUsage(data, now: now)
         XCTAssertEqual(month?.tokens, 6907839)
         XCTAssertEqual(month?.through, "2026-10-02")
         let old = try activity("[{\"startDate\":\"2026-09-30\",\"tokens\":100}]")
@@ -59,10 +59,10 @@ final class TokenUsagePresentationTests: XCTestCase {
         XCTAssertEqual(TokenUsagePresentation.hundredMillions(0), "0.00 亿")
     }
 
-    func testMonthUsesLocalCalendarAcrossYearBoundary() throws {
-        let now = ISO8601DateFormatter().date(from: "2026-12-31T18:00:00Z")!
+    func testMonthUsesBeijingCalendarAcrossYearBoundary() throws {
+        let before = ISO8601DateFormatter().date(from: "2026-12-31T15:59:59Z")!
         let data = try activity("[{\"startDate\":\"2027-01-01\",\"tokens\":1000000}]")
-        XCTAssertEqual(TokenUsagePresentation.monthUsage(data, now: now, timeZone: TimeZone(secondsFromGMT: 28800)!)?.tokens, 1000000)
-        XCTAssertNil(TokenUsagePresentation.monthUsage(data, now: now, timeZone: TimeZone(secondsFromGMT: 0)!))
+        XCTAssertNil(TokenUsagePresentation.monthUsage(data, now: before))
+        XCTAssertEqual(TokenUsagePresentation.monthUsage(data, now: before.addingTimeInterval(1))?.tokens, 1000000)
     }
 }

@@ -26,6 +26,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
     private var profileHosts: [String: NSHostingView<ProfileCardView>] = [:]
     private weak var refreshMenuItem: NSMenuItem?
     private weak var tokenDetailsMenu: NSMenu?
+    private var tokenMonthRows: [(activity: TokenActivity, value: NSMenuItem, through: NSMenuItem)] = []
     private var lastLiveAuthMtime: Date?
     private var liveAuthWarning: LiveAuthWarning?
 
@@ -109,7 +110,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
         self.populateTokenDetails(menu)
     }
 
-    func appendItems(to menu: NSMenu) {
+    func appendItems(to menu: NSMenu, now: Date = Date()) {
         self.menu = menu
         self.headerHost = nil
         self.profileHosts.removeAll()
@@ -123,7 +124,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
             menu.addItem(item)
         }
 
-        self.addUsageHeader(to: menu)
+        self.addUsageHeader(to: menu, now: now)
 
         let records = ProfileHealth.build(
             profiles: self.store.config.profiles,
@@ -132,7 +133,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
             canActivateAuth: { self.store.authCanBeActivated(for: $0) })
 
         for (index, health) in self.orderedRecords(records).enumerated() {
-            self.addProfileCard(for: health, to: menu)
+            self.addProfileCard(for: health, to: menu, now: now)
             if index != records.indices.last {
                 self.addProfileDivider(to: menu)
             }
@@ -197,7 +198,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
         return active + ProfileHealth.menuOrderedInactive(records)
     }
 
-    private func usageHeader() -> UsageHeaderView {
+    private func usageHeader(now: Date = Date()) -> UsageHeaderView {
         let updatedAt = self.store.statuses.values.compactMap { $0.snapshot?.fetchedAt }.max()
         let tracked = self.store.config.profiles.filter {
             if case .notSetUp = self.store.statuses[$0.id] ?? .notSetUp { return false }
@@ -209,7 +210,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
             return .init(identity: self.store.savedAuthFingerprint(for: profile.id),
                          activity: status.snapshot?.tokenActivity,
                          cached: TokenUsagePresentation.isCached(status))
-        })
+        }, now: now)
         let header = UsageHeaderView(
             isRefreshing: self.usageProvider.isRefreshing,
             updatedAt: updatedAt,
@@ -217,39 +218,31 @@ final class AccountManager: NSObject, NSMenuDelegate {
             trackedProfiles: tracked.count,
             tokenSummary: tokenSummary.values,
             tokenCoverage: tokenSummary.coverage,
-            refreshProgress: "正在刷新：\(self.usageProvider.completedProfiles)/\(self.usageProvider.totalProfiles) 个账号")
+            refreshProgress: "正在刷新：\(self.usageProvider.completedProfiles)/\(self.usageProvider.totalProfiles) 个账号", now: now)
         return header
     }
 
-    private func addUsageHeader(to menu: NSMenu) {
-        let header = self.usageHeader()
-        let host = NSHostingView(rootView: header)
+    private func addUsageHeader(to menu: NSMenu, now: Date) {
+        let header = self.usageHeader(now: now)
+        let host = AccountMenuLayout.makeHost(rootView: header, height: header.showsFailure ? UsageHeaderView.failureHeight : UsageHeaderView.baseHeight)
         self.headerHost = host
-        host.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: 290,
-            height: header.showsFailure ? UsageHeaderView.failureHeight : UsageHeaderView.baseHeight)
         let item = NSMenuItem()
         item.view = host
         menu.addItem(item)
     }
 
-    private func addProfileCard(for health: ProfileHealth, to menu: NSMenu) {
+    private func addProfileCard(for health: ProfileHealth, to menu: NSMenu, now: Date) {
         let duplicateLine = self.duplicateSummary(for: health.profile.id)
         let card = ProfileCardView(
             profile: health.profile,
             status: health.status,
             isActive: health.isActive,
             duplicateLine: duplicateLine,
-            onSwitch: { [weak self] in self?.selectProfile(health.profile.id) })
-        let host = NSHostingView(rootView: card)
-        self.profileHosts[health.profile.id] = host
-        host.frame = NSRect(
-            x: 0,
-            y: 0,
-            width: 290,
+            onSwitch: { [weak self] in self?.selectProfile(health.profile.id) }, now: now)
+        let host = AccountMenuLayout.makeHost(
+            rootView: card,
             height: self.cardHeight(for: health.status, hasDuplicate: duplicateLine != nil))
+        self.profileHosts[health.profile.id] = host
         let item = NSMenuItem()
         item.view = host
         menu.addItem(item)
@@ -259,8 +252,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
         let divider = Color(nsColor: .separatorColor)
             .frame(height: 1)
             .padding(.horizontal, 14)
-        let host = NSHostingView(rootView: divider)
-        host.frame = NSRect(x: 0, y: 0, width: 290, height: 5)
+        let host = AccountMenuLayout.makeHost(rootView: divider, height: 5)
         let item = NSMenuItem()
         item.view = host
         menu.addItem(item)
@@ -282,6 +274,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
     }
 
     private func addTokenDetails(to menu: NSMenu) {
+        tokenMonthRows.removeAll()
         let root = NSMenuItem(title: "Token 用量详情", action: nil, keyEquivalent: "")
         let details = NSMenu()
         details.addItem(NSMenuItem(title: "打开后加载详情", action: nil, keyEquivalent: ""))
@@ -293,14 +286,17 @@ final class AccountManager: NSObject, NSMenuDelegate {
 
     private func populateTokenDetails(_ details: NSMenu) {
         details.removeAllItems()
-        func note(_ title: String, in target: NSMenu) {
+        tokenMonthRows.removeAll()
+        @discardableResult
+        func note(_ title: String, in target: NSMenu) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             item.isEnabled = false
             target.addItem(item)
+            return item
         }
         note("官方 Codex 统计，可能延迟更新", in: details)
-        note("不含其他渠道；每日缺项不代表零", in: details)
-        note("本月：当前自然月的已返回记录", in: details)
+        note("服务端日桶保留原日期；缺项不代表零", in: details)
+        note("本月：按北京日期筛选服务端日记录", in: details)
         for profile in self.store.config.profiles {
             let item = NSMenuItem(title: profile.label, action: nil, keyEquivalent: "")
             let account = NSMenu()
@@ -317,14 +313,10 @@ final class AccountManager: NSObject, NSMenuDelegate {
                     note("累计：未获取", in: account)
                 }
                 note("读取于：\(DateFormatter.profileDetailTimestamp.string(from: activity.fetchedAt))", in: account)
-                if let month = TokenUsagePresentation.monthUsage(activity) {
-                    note("本月：\(TokenUsagePresentation.hundredMillions(month.tokens)) Token", in: account)
-                    note("已返回记录截至：\(month.through)", in: account)
-                } else {
-                    note("本月：未获取（不代表零消耗）", in: account)
-                }
+                let value = note("本月：未获取（不代表零消耗）", in: account)
+                let through = note("服务端未返回本月日记录", in: account)
+                tokenMonthRows.append((activity, value, through))
                 let days = activity.dailyUsageBuckets ?? []
-                if days.isEmpty { note("每日用量：未获取", in: account) }
                 for day in days.sorted(by: { $0.startDate > $1.startDate }) {
                     note("\(day.startDate)：\(TokenUsagePresentation.millions(day.tokens)) Token", in: account)
                 }
@@ -334,12 +326,32 @@ final class AccountManager: NSObject, NSMenuDelegate {
             item.submenu = account
             details.addItem(item)
         }
+        refreshTokenMonthRows(now: Date())
     }
 
-    private func refreshVisibleItems() {
+    private func refreshTokenMonthRows(now: Date) {
+        for row in tokenMonthRows {
+            if let month = TokenUsagePresentation.monthUsage(row.activity, now: now) {
+                row.value.title = "本月：\(TokenUsagePresentation.hundredMillions(month.tokens)) Token"
+                row.through.title = "已返回记录截至：\(month.through)"
+            } else {
+                row.value.title = "本月：未获取（不代表零消耗）"
+                row.through.title = "服务端未返回本月日记录"
+            }
+        }
+    }
+
+    // Recompute visible time labels from the local clock without any fetch,
+    // account refresh, or root-menu reconstruction.
+    func refreshDisplayedTimes(now: Date = Date()) {
+        refreshTokenMonthRows(now: now)
+        refreshVisibleItems(now: now)
+    }
+
+    private func refreshVisibleItems(now: Date = Date()) {
         guard self.isMenuOpen else { return }
         if let host = self.headerHost {
-            let header = self.usageHeader()
+            let header = self.usageHeader(now: now)
             host.rootView = header
             host.frame.size.height = header.showsFailure ? UsageHeaderView.failureHeight : UsageHeaderView.baseHeight
         }
@@ -351,7 +363,7 @@ final class AccountManager: NSObject, NSMenuDelegate {
             let duplicate = self.duplicateSummary(for: health.profile.id)
             host.rootView = ProfileCardView(profile: health.profile, status: health.status,
                 isActive: health.isActive, duplicateLine: duplicate,
-                onSwitch: { [weak self] in self?.selectProfile(health.profile.id) })
+                onSwitch: { [weak self] in self?.selectProfile(health.profile.id) }, now: now)
             host.frame.size.height = self.cardHeight(for: health.status, hasDuplicate: duplicate != nil)
         }
         self.refreshMenuItem?.title = self.usageProvider.isRefreshing

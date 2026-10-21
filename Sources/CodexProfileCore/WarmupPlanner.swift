@@ -2,10 +2,7 @@ import Foundation
 
 public enum WarmupPlanner {
     public static var calendar: Calendar {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.locale = Locale(identifier: "en_US_POSIX")
-        calendar.timeZone = TimeZone(identifier: WarmupTimeZone.identifier)!
-        return calendar
+        BeijingTime.calendar
     }
 
     public static func isValidDate(_ date: WarmupLocalDate?) -> Bool {

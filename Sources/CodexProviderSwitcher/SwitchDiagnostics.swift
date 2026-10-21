@@ -1,4 +1,5 @@
 import Foundation
+import CodexProfileCore
 
 enum SwitchFailureStage: String, Equatable {
     case proxyCheck = "代理检查"
@@ -57,7 +58,7 @@ final class SwitchDiagnosticLogger: SwitchDiagnosticLogging {
         lock.lock()
         defer { lock.unlock() }
 
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = BeijingTime.iso8601String(Date())
         let message = Self.redact(error.underlying.localizedDescription)
         let line = "\(timestamp) [\(error.stage.rawValue)] \(message)\n"
         guard let lineData = line.data(using: .utf8) else {

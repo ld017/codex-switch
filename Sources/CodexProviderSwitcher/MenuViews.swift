@@ -2,9 +2,9 @@ import Cocoa
 import CodexProfileCore
 import SwiftUI
 
-func resetCountdown(from date: Date?) -> String {
-    guard let date, date > Date() else { return "" }
-    let diff = Int(date.timeIntervalSinceNow)
+func resetCountdown(from date: Date?, now: Date = Date()) -> String {
+    guard let date, date > now else { return "" }
+    let diff = Int(date.timeIntervalSince(now))
     let days = diff / 86400
     let hours = (diff % 86400) / 3600
     let mins = (diff % 3600) / 60
@@ -34,7 +34,7 @@ func usageWindowLabel(durationMins: Int?, legacyLabel: String) -> String {
     guard let durationMins, durationMins > 0 else { return legacyLabel }
     if durationMins == 7 * 24 * 60 { return "周" }
     if durationMins % (24 * 60) == 0 { return "\(durationMins / (24 * 60))天" }
-    if durationMins % 60 == 0 { return "\(durationMins / 60)时" }
+    if durationMins % 60 == 0 { return "\(durationMins / 60)小时" }
     return "\(durationMins)分"
 }
 
@@ -79,17 +79,13 @@ func creditsDisplayName(_ value: Double?) -> String? {
 enum ResetCreditPresentation {
     static func text(
         count: Int,
-        nearestExpiration: Date?,
-        timeZone: TimeZone = .current
+        nearestExpiration: Date?
     ) -> String {
         guard count > 0 else { return "重置卡 0 张" }
         guard let nearestExpiration else { return "重置卡 \(count) 张" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = timeZone
-        formatter.dateFormat = "M月d日 HH:mm"
+        let formatter = BeijingTime.formatter(pattern: "M月d日 HH:mm")
         return "重置卡 \(count) 张 · 最近到期 "
-            + formatter.string(from: nearestExpiration)
+            + formatter.string(from: nearestExpiration) + "（北京时间）"
     }
 }
 
@@ -212,28 +208,68 @@ struct UsageRow: View {
     let label: String
     let remainingPercent: Int
     let resetAt: Date?
+    let resetPresentation: QuotaResetPresentation.Value?
     let isHighlighted: Bool
+    var now: Date = Date()
+
+    init(
+        label: String,
+        remainingPercent: Int,
+        resetAt: Date?,
+        resetPresentation: QuotaResetPresentation.Value? = nil,
+        isHighlighted: Bool,
+        now: Date = Date()
+    ) {
+        self.label = label
+        self.remainingPercent = remainingPercent
+        self.resetAt = resetAt
+        self.resetPresentation = resetPresentation
+        self.isHighlighted = isHighlighted
+        self.now = now
+    }
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: AccountMenuLayout.rowSpacing) {
             Text(self.label)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(self.isHighlighted ? .secondary : .tertiary)
-                .frame(width: 16, alignment: .leading)
+                .frame(width: AccountMenuLayout.windowLabelWidth, alignment: .leading)
 
             UsageBar(
                 percent: Double(self.remainingPercent),
                 tint: progressColor(forRemaining: self.remainingPercent))
+                .frame(minWidth: AccountMenuLayout.minimumBarWidth, maxWidth: .infinity)
 
             Text("\(self.remainingPercent)%")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(self.isHighlighted ? .primary : .secondary)
-                .frame(width: 30, alignment: .trailing)
+                .frame(width: AccountMenuLayout.percentageWidth, alignment: .trailing)
 
-            Text(resetCountdown(from: self.resetAt))
+            self.timeView
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var timeView: some View {
+        if let resetPresentation {
+            ViewThatFits(in: .horizontal) {
+                Text(resetPresentation.text)
+                    .fixedSize(horizontal: true, vertical: false)
+                Text(resetPresentation.compactText)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .font(.system(size: 9, design: .monospaced))
+            .foregroundStyle(self.isHighlighted ? .secondary : .tertiary)
+            .lineLimit(1)
+            .frame(width: AccountMenuLayout.primaryTimeWidth, alignment: .trailing)
+            .help(resetPresentation.help)
+            .accessibilityLabel(resetPresentation.accessibilityLabel)
+        } else {
+            Text(resetCountdown(from: self.resetAt, now: now))
                 .font(.system(size: 9, design: .monospaced))
                 .foregroundStyle(self.isHighlighted ? .secondary : .tertiary)
-                .frame(width: 42, alignment: .trailing)
+                .frame(width: AccountMenuLayout.primaryTimeWidth, alignment: .trailing)
         }
     }
 }
@@ -246,13 +282,14 @@ struct UsageHeaderView: View {
     var tokenSummary: String = "Token 合计：未获取"
     var tokenCoverage: String = ""
     var refreshProgress: String? = nil
+    var now: Date = Date()
 
     static let baseHeight: CGFloat = 73
     static let failureHeight: CGFloat = 88
 
     var body: some View {
         VStack(spacing: 2) {
-            Text("OpenAI 账号剩余额度")
+            Text("OpenAI 额度与重置（北京时间）")
                 .font(.system(size: 12, weight: .semibold))
 
             Text(tokenSummary)
@@ -276,9 +313,9 @@ struct UsageHeaderView: View {
                     .lineLimit(1)
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, AccountMenuLayout.horizontalPadding)
         .padding(.vertical, 7)
-        .frame(width: 290, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 
@@ -289,7 +326,7 @@ struct UsageHeaderView: View {
     private var statusLabel: String {
         if self.isRefreshing { return self.refreshProgress ?? "正在刷新…" }
         guard let updatedAt else { return "暂无额度数据" }
-        return updatedLabel(from: updatedAt)
+        return updatedLabel(from: updatedAt, now: now)
     }
 
     private var failureLabel: String {
@@ -306,6 +343,7 @@ struct ProfileCardView: View {
     let isActive: Bool
     let duplicateLine: String?
     let onSwitch: () -> Void
+    var now: Date = Date()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @State private var isHovered = false
@@ -321,19 +359,19 @@ struct ProfileCardView: View {
                         .lineLimit(1)
                 }
                 self.statusContent
-                Text(TokenUsagePresentation.cardLabel(self.status))
+                Text(TokenUsagePresentation.cardLabel(self.status, now: now))
                     .font(.system(size: 10))
                     .foregroundStyle(self.metadataColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
-                Text(TokenUsagePresentation.cardNote(self.status))
+                Text(TokenUsagePresentation.cardNote(self.status, now: now))
                     .font(.system(size: 9))
                     .foregroundStyle(self.metadataColor)
                     .lineLimit(1)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, AccountMenuLayout.horizontalPadding)
             .padding(.vertical, 5)
-            .frame(width: 290, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
         .buttonStyle(ProfileCardButtonStyle(
@@ -410,11 +448,12 @@ struct ProfileCardView: View {
                 UsageRow(
                     label: usageWindowLabel(
                         durationMins: snap.primaryWindowDurationMins,
-                        legacyLabel: "5时"),
+                        legacyLabel: "主窗口"),
                     remainingPercent: RemainingQuotaPresentation.percent(
                         fromUsed: snap.primaryUsedPercent),
                     resetAt: snap.primaryResetAt,
-                    isHighlighted: self.isActive || self.isHovered)
+                    resetPresentation: Self.primaryResetPresentation(status: self.status, now: now),
+                    isHighlighted: self.isActive || self.isHovered, now: now)
             }
             if self.hasSecondaryWindow(snap) {
                 UsageRow(
@@ -424,7 +463,7 @@ struct ProfileCardView: View {
                     remainingPercent: RemainingQuotaPresentation.percent(
                         fromUsed: snap.secondaryUsedPercent),
                     resetAt: snap.secondaryResetAt,
-                    isHighlighted: self.isActive || self.isHovered)
+                    isHighlighted: self.isActive || self.isHovered, now: now)
             }
             if let count = snap.resetCreditsAvailable {
                 HStack(spacing: 4) {
@@ -447,6 +486,14 @@ struct ProfileCardView: View {
 
     private func hasSecondaryWindow(_ snap: UsageSnapshot) -> Bool {
         snap.secondaryWindowDurationMins != nil || snap.secondaryResetAt != nil || snap.secondaryUsedPercent > 0
+    }
+
+    static func primaryResetPresentation(status: ProfileStatus, now: Date) -> QuotaResetPresentation.Value? {
+        guard let snapshot = status.snapshot else { return nil }
+        return QuotaResetPresentation.make(
+            resetAt: snapshot.primaryResetAt,
+            now: now,
+            isCached: QuotaResetPresentation.isCachedQuota(status))
     }
 
     private var planType: String? {

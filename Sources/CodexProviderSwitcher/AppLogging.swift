@@ -92,13 +92,7 @@ enum AppLogger {
         }
     }
 
-    private static let timestampFormatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
-
     private static func timestamp() -> String {
-        return self.timestampFormatter.string(from: Date())
+        BeijingTime.iso8601String(Date(), fractionalSeconds: true)
     }
 }

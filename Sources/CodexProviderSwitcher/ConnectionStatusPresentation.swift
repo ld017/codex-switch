@@ -1,4 +1,5 @@
 import CodexProviderCore
+import CodexProfileCore
 import Foundation
 
 enum MenuProviderState: Equatable {
@@ -73,9 +74,7 @@ struct ConnectionStatusPresentation: Equatable {
         let shared = s.sharedHistoryConfigured.map { $0 ? "已匹配" : "检查未通过" } ?? pending
         let updated: String
         if let date = s.diagnosticsCheckedAt {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm:ss"
-            let time = formatter.string(from: date)
+            let time = BeijingTime.format(date, pattern: "M月d日 HH:mm:ss'（北京时间）'")
             if s.isRefreshingDiagnostics {
                 updated = "正在更新…（上次 \(time)）"
             } else {

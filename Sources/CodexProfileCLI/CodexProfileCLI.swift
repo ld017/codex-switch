@@ -1089,7 +1089,7 @@ enum CodexProfileCLI {
         }
 
         try self.markProfileExhausted(profile, until: blockedUntil, source: "codex_exec")
-        self.note("Marked '\(profile)' exhausted until \(ISO8601DateFormatter().string(from: blockedUntil))")
+        self.note("Marked '\(profile)' exhausted until \(BeijingTime.iso8601String(blockedUntil))")
     }
 
     private static func markProfileExhausted(_ profile: String, until blockedUntil: Date, source: String) throws {

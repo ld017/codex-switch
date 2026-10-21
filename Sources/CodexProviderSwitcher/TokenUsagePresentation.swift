@@ -17,9 +17,8 @@ enum TokenUsagePresentation {
     }
 
     /// Bucket dates are service calendar dates; do not reinterpret them as UTC instants.
-    static func monthUsage(_ activity: TokenActivity?, now: Date = Date(), timeZone: TimeZone = .current) -> MonthUsage? {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
+    static func monthUsage(_ activity: TokenActivity?, now: Date = Date()) -> MonthUsage? {
+        let calendar = BeijingTime.calendar
         let parts = calendar.dateComponents([.year, .month, .day], from: now)
         let prefix = String(format: "%04d-%02d-", parts.year!, parts.month!)
         let today = prefix + String(format: "%02d", parts.day!)
@@ -55,17 +54,17 @@ enum TokenUsagePresentation {
         return true
     }
 
-    static func cardLabel(_ status: ProfileStatus) -> String {
+    static func cardLabel(_ status: ProfileStatus, now: Date = Date()) -> String {
         let activity = status.snapshot?.tokenActivity
         let lifetime = activity?.lifetimeTokens.map(compact) ?? "未获取"
-        let month = monthUsage(activity).map { hundredMillions($0.tokens) } ?? "未获取"
+        let month = monthUsage(activity, now: now).map { hundredMillions($0.tokens) } ?? "未获取"
         return "累计 Token：\(lifetime) · 本月：\(month)"
     }
 
-    static func cardNote(_ status: ProfileStatus) -> String {
+    static func cardNote(_ status: ProfileStatus, now: Date = Date()) -> String {
         let activity = status.snapshot?.tokenActivity
         let prefix = isCached(status) && activity != nil ? "缓存 · " : ""
-        if let month = monthUsage(activity) {
+        if let month = monthUsage(activity, now: now) {
             return prefix + "本月已返回记录 · 截至 \(month.through)"
         }
         if let last = activity?.dailyUsageBuckets?.map(\.startDate).max() {
@@ -85,7 +84,7 @@ enum TokenUsagePresentation {
         let coverage: String
     }
 
-    static func summary(_ entries: [Entry], now: Date = Date(), timeZone: TimeZone = .current) -> Summary {
+    static func summary(_ entries: [Entry], now: Date = Date()) -> Summary {
         let groups = Dictionary(grouping: entries.filter { $0.identity != nil }, by: { $0.identity! })
         let unknown = entries.filter { $0.identity == nil }.count
         var lifetime: Int64 = 0, monthly: Int64 = 0
@@ -101,7 +100,7 @@ enum TokenUsagePresentation {
                 lifetime = sum.partialValue
                 lifetimeCount += 1
             }
-            if let month = monthUsage(newest.activity, now: now, timeZone: timeZone) {
+            if let month = monthUsage(newest.activity, now: now) {
                 let sum = monthly.addingReportingOverflow(month.tokens)
                 guard !sum.overflow else { return Summary(values: "Token 合计：数值超出范围", coverage: "") }
                 monthly = sum.partialValue

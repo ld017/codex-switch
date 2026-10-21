@@ -4,7 +4,7 @@ import Foundation
 /// Keeping this value in the model prevents a plan from silently changing its
 /// meaning when the machine's timezone changes.
 public enum WarmupTimeZone {
-    public static let identifier = "Asia/Shanghai"
+    public static let identifier = BeijingTime.identifier
 }
 
 public enum WarmupModelError: LocalizedError, Equatable {

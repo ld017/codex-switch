@@ -125,10 +125,7 @@ private func shortHash(_ value: String, head: Int = 6, tail: Int = 4) -> String 
 
 extension DateFormatter {
     static let profileDetailTimestamp: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
+        BeijingTime.formatter(pattern: "yyyy-MM-dd HH:mm'（北京时间）'")
     }()
 }
 

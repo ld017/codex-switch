@@ -105,14 +105,14 @@ if [[ -d "${LEGACY_APPLICATION}" ]]; then
     "${LAUNCH_SERVICES_REGISTER}" -u "${LEGACY_APPLICATION}" || true
     /bin/mv \
         "${LEGACY_APPLICATION}" \
-        "${APP_BACKUP_DIRECTORY}/Codex Provider Switcher-$(/bin/date +%Y%m%d-%H%M%S).app.backup"
+        "${APP_BACKUP_DIRECTORY}/Codex Provider Switcher-$(TZ=Asia/Shanghai /bin/date +%Y%m%d-%H%M%S).app.backup"
 fi
 
 if [[ -d "${FINAL_APPLICATION}" ]]; then
     "${LAUNCH_SERVICES_REGISTER}" -u "${FINAL_APPLICATION}" || true
     /bin/mv \
         "${FINAL_APPLICATION}" \
-        "${APP_BACKUP_DIRECTORY}/Codex Switch-$(/bin/date +%Y%m%d-%H%M%S).app.backup"
+        "${APP_BACKUP_DIRECTORY}/Codex Switch-$(TZ=Asia/Shanghai /bin/date +%Y%m%d-%H%M%S).app.backup"
 fi
 
 /usr/bin/ditto "${STAGED_APPLICATION}" "${FINAL_APPLICATION}"

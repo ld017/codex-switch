@@ -354,7 +354,7 @@ final class ProfileStore: ObservableObject {
             let cacheAge = self.cache.snapshots[profile.id].map { Int(Date().timeIntervalSince($0.fetchedAt)) }
             let cacheText = cacheAge.map { "\($0)s" } ?? "<none>"
             let diagnostics = self.refreshDiagnostics[profile.id]
-            let lastAttemptAt = diagnostics?.lastAttemptAt.map { ISO8601DateFormatter().string(from: $0) } ?? "<none>"
+            let lastAttemptAt = diagnostics?.lastAttemptAt.map { BeijingTime.iso8601String($0) } ?? "<none>"
             let decision = diagnostics?.lastDecision ?? "<none>"
             let error = diagnostics?.lastError.map { LogRedactor.excerpt($0, maxLength: 120) } ?? "<none>"
             let availability = self.authStoreAvailability(for: profile.id)

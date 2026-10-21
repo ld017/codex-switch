@@ -45,6 +45,7 @@ struct WarmupResultRow: Identifiable, Equatable {
 
 @MainActor
 final class WarmupViewModel: ObservableObject {
+    @Published private(set) var currentTime: Date
     @Published var resources: WarmupResourceSnapshot?
     @Published var draft: WarmupDraftPlan
     @Published var savedPlan: CodexProfileCore.WarmupPlan?
@@ -71,6 +72,7 @@ final class WarmupViewModel: ObservableObject {
 
     init(now: @escaping () -> Date = Date.init) {
         self.now = now
+        self.currentTime = now()
         let tomorrow = WarmupPlanner.calendar.date(byAdding: .day, value: 1, to: now())!
         let local = WarmupPlanner.localComponents(for: tomorrow).date
         draft = WarmupDraftPlan(targetDate: Self.dateString(local))
@@ -212,12 +214,12 @@ final class WarmupViewModel: ObservableObject {
         set { draft.targetDate = Self.dateString(WarmupPlanner.localComponents(for: newValue).date) }
     }
 
+    func refreshClock() { currentTime = now() }
+
+    var currentTimeText: String { Self.display(currentTime, includesSeconds: true) }
+
     static func display(_ date: Date, includesSeconds: Bool = false) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = WarmupPlanner.calendar.timeZone
-        formatter.dateFormat = includesSeconds ? "yyyy年M月d日 HH:mm:ss" : "yyyy年M月d日 HH:mm"
-        return formatter.string(from: date)
+        BeijingTime.format(date, pattern: includesSeconds ? "yyyy年M月d日 HH:mm:ss" : "yyyy年M月d日 HH:mm")
     }
 
     private func selectedProfileIDs(requireAvailable: Bool = true) throws -> [String] {
